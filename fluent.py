@@ -211,51 +211,6 @@ def mica_supported():
     return sys.platform == "win32" and sys.getwindowsversion().build >= 22000
 
 
-class _HIGHCONTRAST(ctypes.Structure):
-    _fields_ = [("cbSize", ctypes.c_uint), ("dwFlags", ctypes.c_uint), ("lpszDefaultScheme", ctypes.c_wchar_p)]
-
-
-class _SYSTEM_POWER_STATUS(ctypes.Structure):
-    _fields_ = [("ACLineStatus", ctypes.c_ubyte), ("BatteryFlag", ctypes.c_ubyte),
-                ("BatteryLifePercent", ctypes.c_ubyte), ("SystemStatusFlag", ctypes.c_ubyte),
-                ("BatteryLifeTime", ctypes.c_ulong), ("BatteryFullLifeTime", ctypes.c_ulong)]
-
-
-def mica_unavailable_reason():
-    """
-    Why Windows won't draw Mica right now, or None if it will. Where it doesn't, the pixels Mica
-    should show through come out black, so the app has to paint a solid background instead.
-    """
-    if not mica_supported():
-        return "Mica needs Windows 11"
-    try:
-        import winreg
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
-                            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as key:
-            if winreg.QueryValueEx(key, "EnableTransparency")[0] == 0:
-                return "transparency effects are off in Windows settings"
-    except OSError:
-        pass  # No value means transparency is on
-    try:
-        user32 = ctypes.windll.user32
-        SM_REMOTESESSION = 0x1000
-        if user32.GetSystemMetrics(SM_REMOTESESSION):
-            return "this is a Remote Desktop session"
-
-        SPI_GETHIGHCONTRAST, HCF_HIGHCONTRASTON = 0x42, 0x1
-        contrast = _HIGHCONTRAST(cbSize=ctypes.sizeof(_HIGHCONTRAST))
-        if user32.SystemParametersInfoW(SPI_GETHIGHCONTRAST, contrast.cbSize, ctypes.byref(contrast), 0) \
-                and contrast.dwFlags & HCF_HIGHCONTRASTON:
-            return "a high contrast theme is on"
-
-        power = _SYSTEM_POWER_STATUS()
-        if ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(power)) and power.SystemStatusFlag == 1:
-            return "battery saver is on"
-    except Exception:
-        pass
-    return None
-
-
 def enable_mica(window):
     """Turn on the Mica backdrop for a window. Returns False where it isn't available."""
     if not mica_supported():

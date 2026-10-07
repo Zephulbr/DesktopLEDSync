@@ -1,6 +1,7 @@
 """Shared config.json handling used by both the GUI and the core engine."""
 import json
 import os
+import stat
 import sys
 import tempfile
 import time
@@ -40,23 +41,42 @@ def read_config():
 
 
 def write_config(config):
-    """Write config.json atomically so the engine never reads a half-written file."""
+    """
+    Write config.json atomically so the engine never reads a half-written file. If Windows won't let
+    the new file replace the old one (antivirus or a sync tool holding it open, a read-only file),
+    overwrite it in place instead.
+    """
+    text = json.dumps(config, indent=2)
     fd, tmp_path = tempfile.mkstemp(dir=application_path, prefix=".config-", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=2)
-        # On Windows the replace fails if another thread has the file open at that instant, so retry briefly
-        for attempt in range(10):
+            f.write(text)
+        # The replace fails while anything else has the file open, so retry for about a second
+        delay = 0.02
+        for _ in range(8):
             try:
                 os.replace(tmp_path, CONFIG_PATH)
                 return
             except PermissionError:
-                if attempt == 9:
-                    raise
-                time.sleep(0.05)
+                time.sleep(delay)
+                delay *= 2
     finally:
         if os.path.exists(tmp_path):
-            os.remove(tmp_path)
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+    try:
+        if os.path.exists(CONFIG_PATH):
+            os.chmod(CONFIG_PATH, stat.S_IREAD | stat.S_IWRITE)  # Clear the read-only attribute
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            f.write(text)
+    except PermissionError as e:
+        raise PermissionError(
+            f"Windows denied access to {CONFIG_PATH}. Another program (often antivirus or a cloud sync "
+            "folder) may be blocking it. Moving the app into a folder of its own, outside Downloads, "
+            "usually helps.") from e
 
 
 def parse_rgb(value):

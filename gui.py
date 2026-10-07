@@ -17,6 +17,7 @@ import keyring
 
 import fluent
 from fluent import C
+import media_apps
 from config_store import (
     DEFAULT_IDLE_COLOR, IDLE_BEHAVIORS, KEYRING_PLACEHOLDER, KEYRING_SERVICE,
     normalize_idle_behavior, parse_rgb, parse_transition_seconds, read_config, resolve_password, write_config,
@@ -27,8 +28,8 @@ from version import __version__
 BACKGROUND_FLAG = "--background"
 AUTOSTART_SHORTCUT_NAME = "DesktopLEDSyncGUI.lnk"
 MAX_LOG_LINES = 500
+OPEN_APPS_REFRESH_MS = 10000
 TRANSITION_CHOICES = (0, 0.25, 0.5, 1, 1.5, 2, 3, 5)
-MICA_CHECK_INTERVAL_MS = 3000
 
 # Segoe Fluent Icons (Windows 11) / Segoe MDL2 Assets (Windows 10) glyphs
 ICON_INFO = "\uE946"
@@ -42,6 +43,8 @@ ICON_CLOSE = "\uE8BB"
 ICON_POWER = "\uE7E8"
 ICON_LOG = "\uE81C"
 ICON_BACKDROP = "\uE771"
+ICON_MUSIC = "\uE8D6"
+ICON_FILTER = "\uE71C"
 
 ctk.set_appearance_mode("System")  # Follows Windows Dark/Light mode
 ctk.set_default_color_theme("blue")
@@ -78,9 +81,10 @@ class DesktopLEDSyncGUI(ctk.CTk):
         # Windows 11 styling: pick the colors for Mica (or a solid background), then build the widgets
         self._setup_fonts()
         self._windows = [self]  # This window and its dialogs, which share the backdrop
-        self.mica_allowed = ctk.BooleanVar(value=bool(settings.get("mica_background", True)))
-        self._mica_reason = fluent.mica_unavailable_reason()
-        self.mica = self.mica_allowed.get() and self._mica_reason is None and fluent.enable_mica(self)
+        # Off unless the user turns it on: where Windows can't draw Mica the window comes out black.
+        # (A new key, because older versions saved "mica_background": true for everyone.)
+        self.mica_allowed = ctk.BooleanVar(value=bool(settings.get("mica_enabled", False)))
+        self.mica = self.mica_allowed.get() and fluent.enable_mica(self)
         fluent.configure(self.mica)
         fluent.apply_theme(self.font_body.cget("family"))
         self.configure(fg_color=C.window)
@@ -166,6 +170,26 @@ class DesktopLEDSyncGUI(ctk.CTk):
         ctk.CTkLabel(apply_row, text="Light changes apply when you save.\nEverything else saves instantly.",
                      font=self.font_caption, text_color=C.text_secondary, justify="left", anchor="w").pack(side="left")
 
+        # Music section
+        self._add_section_header(page, "Music")
+
+        card = self._add_card(page, "Preferred app", "Follow this app when it's playing", icon=ICON_MUSIC,
+            help_text="When more than one app is playing (say Spotify and a YouTube video), the lights follow "
+                      "this app.\n\nAny app: follow whichever app Windows shows in its media controls.\n\n"
+                      "Browsers show up as the browser (Chrome, Edge, Firefox...), not the website. "
+                      "Apps that are open right now are listed first.")
+        saved_app = settings.get("preferred_app") or media_apps.ANY_APP
+        self.preferred_app_var = ctk.StringVar(value=saved_app)
+        self.preferred_app_dropdown = self._add_dropdown(card, media_apps.choices([], saved_app),
+                                                         self.preferred_app_var, command=self.on_preferred_app_change)
+        self._preferred_app_card = card
+
+        self.only_preferred_card = self._add_card(page, "Only follow the preferred app",
+                                                  "Ignore other apps, even when it isn't playing", icon=ICON_FILTER)
+        self.only_preferred_var = ctk.BooleanVar(value=bool(settings.get("only_preferred_app", False)))
+        self._add_switch(self.only_preferred_card, self.only_preferred_var, self.save_settings)
+        self._update_only_preferred_visibility()
+
         # Colors section
         self._add_section_header(page, "Colors")
 
@@ -227,12 +251,11 @@ class DesktopLEDSyncGUI(ctk.CTk):
         self.autostart_switch = self._add_switch(card, self.autostart_var, self.on_autostart_toggle)
 
         if fluent.mica_supported():
-            card = self._add_card(page, "Mica background", "Turn off if the window looks black", icon=ICON_BACKDROP,
+            card = self._add_card(page, "Mica background", "Tint the window with your wallpaper", icon=ICON_BACKDROP,
                 help_text="Lets your desktop wallpaper tint the window, like Windows 11's own apps.\n\n"
-                          "The app already switches to a solid background when Windows can't draw Mica "
-                          "(transparency effects off, battery saver, Remote Desktop, high contrast). "
-                          "Turn this off if the window still looks black, which some graphics drivers "
-                          "and virtual machines cause.")
+                          "Turn this back off if the window looks black, which happens when Windows can't "
+                          "draw Mica (transparency effects off, battery saver, Remote Desktop, high contrast, "
+                          "some graphics drivers and virtual machines).")
             self.mica_switch = self._add_switch(card, self.mica_allowed, self.on_mica_toggle)
 
         ctk.CTkFrame(page, fg_color="transparent", height=8).pack()
@@ -242,17 +265,15 @@ class DesktopLEDSyncGUI(ctk.CTk):
         self.tray_icon = None
         self._status_is_error = False
 
-        # Follow Windows switching between light and dark mode, and Mica becoming (un)available
+        # Follow Windows switching between light and dark mode
         self._on_appearance_change(ctk.get_appearance_mode())
         ctk.AppearanceModeTracker.add(self._on_appearance_change, self)
-        if self.mica_allowed.get() and self._mica_reason and fluent.mica_supported():
-            startup_messages.append((f"Using a solid background because {self._mica_reason}.", "info"))
-        self.after(MICA_CHECK_INTERVAL_MS, self._watch_mica)
 
         for message, tag in startup_messages:
             self.append_log(message, tag)
 
         self._upgrade_autostart_shortcut()
+        self.after(500, self._refresh_open_apps)  # Once the window is on screen
         self.after(100, self.poll_queues)
 
         if start_in_background:
@@ -297,23 +318,8 @@ class DesktopLEDSyncGUI(ctk.CTk):
         self.log_box.tag_config("ok", foreground=C.success[index])
         self.log_box.tag_config("info", foreground=C.text_secondary[index])
 
-    def _watch_mica(self):
-        """Windows stops drawing Mica in some situations (see fluent.mica_unavailable_reason), so keep checking."""
-        try:
-            reason = fluent.mica_unavailable_reason()
-            if reason != self._mica_reason:
-                self._mica_reason = reason
-                wanted = self.mica_allowed.get() and reason is None
-                if wanted != self.mica:
-                    if self.mica_allowed.get():
-                        self.append_log(f"Using a solid background because {reason}." if reason
-                                        else "Mica background is available again.", "info")
-                    self._set_mica(wanted)
-        finally:
-            self.after(MICA_CHECK_INTERVAL_MS, self._watch_mica)
-
     def on_mica_toggle(self):
-        self._set_mica(self.mica_allowed.get() and self._mica_reason is None)
+        self._set_mica(self.mica_allowed.get())
         self.save_settings()
 
     def _set_mica(self, on):
@@ -567,6 +573,34 @@ class DesktopLEDSyncGUI(ctk.CTk):
         if color is not None:
             self.idle_swatch.configure(fg_color=fluent.exact("#{:02x}{:02x}{:02x}".format(*color)))
 
+    def on_preferred_app_change(self, _value):
+        self._update_only_preferred_visibility()
+        self.save_settings()
+
+    def _update_only_preferred_visibility(self):
+        """The 'only follow' switch means nothing without a preferred app, so hide it then."""
+        if self.preferred_app_var.get() == media_apps.ANY_APP:
+            self.only_preferred_card.pack_forget()
+        elif not self.only_preferred_card.winfo_manager():
+            self.only_preferred_card.pack(fill="x", pady=(0, 4), after=self._preferred_app_card)
+
+    def _refresh_open_apps(self):
+        """Keep the open media apps at the top of the 'Preferred app' list, looking them up off the UI thread."""
+        def look_up():
+            try:
+                import core
+                names = core.list_open_media_apps()
+            except Exception:
+                return
+            self.ui_calls.put(lambda: self._set_preferred_app_choices(names))
+
+        if self.winfo_viewable():
+            threading.Thread(target=look_up, daemon=True).start()
+        self.after(OPEN_APPS_REFRESH_MS, self._refresh_open_apps)
+
+    def _set_preferred_app_choices(self, open_names):
+        self.preferred_app_dropdown.values = media_apps.choices(open_names, self.preferred_app_var.get())
+
     def _update_idle_color_visibility(self, value):
         """Show the idle color picker only when 'Default Color' is selected."""
         if value == "Default Color":
@@ -633,7 +667,11 @@ class DesktopLEDSyncGUI(ctk.CTk):
         settings["idle_behavior"] = self.idle_var.get()
         settings["match_brightness"] = self.match_brightness_var.get()
         settings["close_behavior"] = self.close_bh_var.get()
-        settings["mica_background"] = self.mica_allowed.get()
+        settings["mica_enabled"] = self.mica_allowed.get()
+        settings.pop("mica_background", None)  # Replaced by mica_enabled
+        preferred_app = self.preferred_app_var.get()
+        settings["preferred_app"] = "" if preferred_app == media_apps.ANY_APP else preferred_app
+        settings["only_preferred_app"] = self.only_preferred_var.get()
         settings["transition_seconds"] = self._transition_choices.get(self.transition_var.get(), 0)
 
         idle_color = parse_rgb(self.idle_color_entry.get())

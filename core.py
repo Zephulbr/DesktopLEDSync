@@ -19,6 +19,7 @@ def log(level, message):
         log_queue.put((level, message))
 
 from colorthief import ColorThief
+from media_apps import app_name, pick_session
 from version import __version__
 
 # Light Providers
@@ -48,10 +49,20 @@ MAX_ART_ATTEMPTS = 3
 FADE_STEP_SECONDS = 0.1
 
 # --- Media Extraction Logic ---
-async def get_media_session():
-    """Gets the active Windows Media session (Spotify, Tidal, Web, etc)"""
+async def get_media_session(preferred_app=None, only_preferred=False):
+    """Gets the Windows media session to follow (Spotify, Tidal, Web, etc), honoring the preferred app"""
     session_manager = await MediaManager.request_async()
-    return session_manager.get_current_session()
+    return pick_session(session_manager, preferred_app, only_preferred, PlaybackStatus.PLAYING)
+
+
+async def _open_media_apps():
+    session_manager = await MediaManager.request_async()
+    return sorted({app_name(s.source_app_user_model_id) for s in session_manager.get_sessions()})
+
+
+def list_open_media_apps():
+    """Names of the apps that have a media session open right now. Blocks; call off the UI thread."""
+    return asyncio.run(_open_media_apps())
 
 async def read_thumbnail_bytes(thumbnail_ref):
     """Reads the album art Windows Runtime stream into a standard Python byte string"""
@@ -318,9 +329,11 @@ async def sync_loop(fader, live_config, is_stopped):
             poll_interval = max(0.2, float(settings.get("poll_interval_seconds", DEFAULT_POLL_INTERVAL)))
         except (TypeError, ValueError):
             poll_interval = DEFAULT_POLL_INTERVAL
+        preferred_app = settings.get("preferred_app")
+        only_preferred = bool(settings.get("only_preferred_app", False))
 
         try:
-            session = await get_media_session()
+            session = await get_media_session(preferred_app, only_preferred)
             status = session.get_playback_info().playback_status if session else None
 
             if status == PlaybackStatus.PLAYING:
@@ -332,7 +345,8 @@ async def sync_loop(fader, live_config, is_stopped):
                     current_track = track
                     art_pending = True
                     art_attempts = 0
-                    log("ok", f"Now Playing: {media_props.title} — {media_props.artist}")
+                    log("ok", f"Now Playing: {media_props.title} — {media_props.artist} "
+                              f"({app_name(session.source_app_user_model_id)})")
 
                 if art_pending:
                     art_attempts += 1
