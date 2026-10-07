@@ -64,7 +64,9 @@ python gui.py        # run directly
 python build.py      # or build dist/DesktopLEDSync.exe
 ```
 
-Releases are built by GitHub Actions on a Windows runner. To publish one, push a tag like `v1.1.1`, or run **Build and Release** from the Actions tab and enter the version.
+The app version is set in `version.py`, and shown in the window header and in the .exe's **Properties → Details**. Bump it with every change.
+
+Releases are built by GitHub Actions on a Windows runner. To publish one, push a tag matching `version.py` (e.g. `v1.2.0`), or run **Build and Release** from the Actions tab and enter that version.
 
 ## How It Works
 

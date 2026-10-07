@@ -18,6 +18,7 @@ from config_store import (
     DEFAULT_IDLE_COLOR, IDLE_BEHAVIORS, KEYRING_PLACEHOLDER, KEYRING_SERVICE, MAX_TRANSITION_SECONDS,
     normalize_idle_behavior, parse_rgb, parse_transition_seconds, read_config, resolve_password, write_config,
 )
+from version import __version__
 
 # Passed by the Windows startup shortcut: start syncing straight away, hidden in the tray
 BACKGROUND_FLAG = "--background"
@@ -125,7 +126,7 @@ class DesktopLEDSyncGUI(ctk.CTk):
     def __init__(self, start_in_background=False):
         super().__init__()
 
-        self.title("Desktop LED Sync")
+        self.title(f"Desktop LED Sync {__version__}")
         self.geometry("520x760")
         self.resizable(False, False)
         if start_in_background:
@@ -153,8 +154,8 @@ class DesktopLEDSyncGUI(ctk.CTk):
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.pack(pady=(20, 8), padx=24, fill="x")
         ctk.CTkLabel(header, text="Desktop LED Sync", font=self.font_title, anchor="w").pack(fill="x")
-        ctk.CTkLabel(header, text="Sync Windows media to your smart lights", font=self.font_body,
-                     text_color=TEXT_SECONDARY, anchor="w").pack(fill="x")
+        ctk.CTkLabel(header, text=f"Sync Windows media to your smart lights  ·  Version {__version__}",
+                     font=self.font_body, text_color=TEXT_SECONDARY, anchor="w").pack(fill="x")
 
         # --- Log Panel and Footer (packed first so they stay at the bottom) ---
         self.log_box = ctk.CTkTextbox(self, height=110, state="disabled", wrap="word", font=self.font_mono)
@@ -781,7 +782,7 @@ class DesktopLEDSyncGUI(ctk.CTk):
             item('Show', self.show_window, default=True),
             item('Quit', self.quit_window)
         )
-        self.tray_icon = pystray.Icon("DesktopLEDSync", image, "Desktop LED Sync", menu)
+        self.tray_icon = pystray.Icon("DesktopLEDSync", image, f"Desktop LED Sync {__version__}", menu)
         threading.Thread(target=self.tray_icon.run, daemon=True).start()
 
     # The tray callbacks run on pystray's thread, so hand the work to the Tk thread

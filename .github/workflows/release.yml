@@ -36,6 +36,18 @@ jobs:
       - name: Check the app imports cleanly
         run: python -c "import core, gui"
 
+      - name: Check the release tag matches version.py
+        if: startsWith(github.ref, 'refs/tags/') || inputs.version != ''
+        shell: bash
+        env:
+          TAG: ${{ inputs.version || github.ref_name }}
+        run: |
+          APP_VERSION=$(python -c "from version import __version__; print(__version__)")
+          if [ "$TAG" != "v$APP_VERSION" ]; then
+            echo "::error::Release $TAG doesn't match the app version $APP_VERSION in version.py. Bump version.py or use v$APP_VERSION."
+            exit 1
+          fi
+
       - name: Build executable
         run: python build.py
 
