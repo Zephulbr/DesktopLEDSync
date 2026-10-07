@@ -1,16 +1,18 @@
 name: Build and Release
 
-# Publishes DesktopLEDSync.exe as a GitHub release when either:
-#   - a tag like v1.1.0 is pushed, or
-#   - it is run from the Actions tab with a version filled in (the tag is created for you).
+# Publishes DesktopLEDSync.exe as a GitHub release when:
+#   - a push to main carries a version in version.py that has no release yet (the tag is created for you),
+#   - a tag like v1.2.0 is pushed, or
+#   - it is run from the Actions tab with a version filled in.
 # Run it from the Actions tab with the version left blank to just build the .exe as an artifact.
 on:
   push:
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version to publish, e.g. v1.1.0 (leave blank to only build)"
+        description: "Release version to publish, e.g. v1.2.0 (leave blank to only build)"
         required: false
         default: ""
 
@@ -18,7 +20,51 @@ permissions:
   contents: write
 
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.decide.outputs.tag }}
+      build: ${{ steps.decide.outputs.build }}
+      publish: ${{ steps.decide.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Decide what to build and publish
+        id: decide
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          APP_VERSION=$(python3 -c "from version import __version__; print(__version__)")
+          echo "App version: $APP_VERSION"
+
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            TAG="$GITHUB_REF_NAME"; PUBLISH=true
+          elif [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="$INPUT_VERSION"; PUBLISH=$([ -n "$TAG" ] && echo true || echo false)
+          else
+            # Push to main: release only when version.py names a version that hasn't been released
+            TAG="v$APP_VERSION"
+            if git ls-remote --exit-code --tags origin "refs/tags/$TAG" > /dev/null; then
+              echo "$TAG is already released; nothing to do. Bump version.py to publish a new build."
+              echo "build=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            PUBLISH=true
+          fi
+
+          if [ "$PUBLISH" = true ] && [ "$TAG" != "v$APP_VERSION" ]; then
+            echo "::error::Release $TAG doesn't match the app version $APP_VERSION in version.py. Bump version.py or use v$APP_VERSION."
+            exit 1
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "build=true" >> "$GITHUB_OUTPUT"
+          echo "publish=$PUBLISH" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: version
+    if: needs.version.outputs.build == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,18 +82,6 @@ jobs:
       - name: Check the app imports cleanly
         run: python -c "import core, gui"
 
-      - name: Check the release tag matches version.py
-        if: startsWith(github.ref, 'refs/tags/') || inputs.version != ''
-        shell: bash
-        env:
-          TAG: ${{ inputs.version || github.ref_name }}
-        run: |
-          APP_VERSION=$(python -c "from version import __version__; print(__version__)")
-          if [ "$TAG" != "v$APP_VERSION" ]; then
-            echo "::error::Release $TAG doesn't match the app version $APP_VERSION in version.py. Bump version.py or use v$APP_VERSION."
-            exit 1
-          fi
-
       - name: Build executable
         run: python build.py
 
@@ -58,10 +92,10 @@ jobs:
           path: dist/DesktopLEDSync.exe
 
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/') || inputs.version != ''
+        if: needs.version.outputs.publish == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.version || github.ref_name }}
+          tag_name: ${{ needs.version.outputs.tag }}
           target_commitish: ${{ github.sha }}
           files: dist/DesktopLEDSync.exe
           generate_release_notes: true
