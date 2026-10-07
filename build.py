@@ -1,6 +1,8 @@
+import importlib.util
+import os
+import shutil
 import subprocess
 import sys
-import os
 import customtkinter as ctk
 
 print("--- Standalone LED Sync Builder ---")
@@ -9,12 +11,10 @@ subprocess.run([sys.executable, "-m", "pip", "install", "pyinstaller"], check=Tr
 
 # Delete old build folders if they exist
 print("\nCleaning up old builds...")
-if os.path.exists("build"):
-    subprocess.run(["rmdir", "/s", "/q", "build"], shell=True)
-if os.path.exists("dist"):
-    subprocess.run(["rmdir", "/s", "/q", "dist"], shell=True)
-if os.path.exists("SyncApp.spec"):
-    os.remove("SyncApp.spec")
+for folder in ("build", "dist"):
+    shutil.rmtree(folder, ignore_errors=True)
+if os.path.exists("DesktopLEDSync.spec"):
+    os.remove("DesktopLEDSync.spec")
 
 print("\nPackaging the application...")
 cmd = [
@@ -22,13 +22,20 @@ cmd = [
     "--name", "DesktopLEDSync",
     "--onefile",
     "--noconsole", # Don't show the black DOS command prompt window anymore
-    "--add-data", "config.json;.", # Include the config file
-    
+
+    # config.json is deliberately NOT bundled: it holds your account details, and the app
+    # reads/creates it next to the .exe on first run anyway.
+
     # CustomTkinter needs its theme files explicitly bundled in Windows
     "--add-data", f"{os.path.dirname(ctk.__file__)};customtkinter",
-    
-    "gui.py"
 ]
+
+# The Windows Runtime projections are namespace packages that PyInstaller can't fully trace
+for winrt_package in ("winrt", "winsdk"):
+    if importlib.util.find_spec(winrt_package):
+        cmd += ["--collect-submodules", winrt_package]
+
+cmd.append("gui.py")
 
 subprocess.run(cmd, check=True)
 

@@ -1,12 +1,16 @@
 import asyncio
-import json
+import hashlib
 import os
 import sys
 from io import BytesIO
 
-# Module-level variables injected by gui.py at runtime
+from config_store import (
+    CONFIG_PATH, DEFAULT_IDLE_COLOR, ConfigError,
+    migrate_plaintext_password, normalize_idle_behavior, parse_rgb, read_config,
+)
+
+# Set by gui.py so log messages reach the GUI log panel
 log_queue = None
-stop_event = None
 
 def log(level, message):
     """Post a log message to the GUI queue, or fall back to print."""
@@ -14,52 +18,31 @@ def log(level, message):
     if log_queue is not None:
         log_queue.put((level, message))
 
-from PIL import Image
 from colorthief import ColorThief
 
 # Light Providers
 from providers.tapo import TapoProvider
 from providers.wled import WLEDProvider
 
-# Windows Runtime APIs
-from winsdk.windows.media.control import (
-    GlobalSystemMediaTransportControlsSessionManager as MediaManager,
-    GlobalSystemMediaTransportControlsSessionPlaybackStatus as PlaybackStatus
-)
-from winsdk.windows.storage.streams import DataReader, IRandomAccessStreamReference
+# Windows Runtime APIs (winrt is the maintained successor of winsdk; both expose the same API)
+try:
+    from winrt.windows.media.control import (
+        GlobalSystemMediaTransportControlsSessionManager as MediaManager,
+        GlobalSystemMediaTransportControlsSessionPlaybackStatus as PlaybackStatus
+    )
+    from winrt.windows.storage.streams import DataReader
+except ImportError:
+    from winsdk.windows.media.control import (
+        GlobalSystemMediaTransportControlsSessionManager as MediaManager,
+        GlobalSystemMediaTransportControlsSessionPlaybackStatus as PlaybackStatus
+    )
+    from winsdk.windows.storage.streams import DataReader
 
-# Configuration Setup
-if getattr(sys, 'frozen', False):
-    application_path = os.path.dirname(sys.executable)
-else:
-    application_path = os.path.dirname(os.path.abspath(__file__))
-
-CONFIG_FILE = os.path.join(application_path, "config.json")
-
-def load_config():
-    if not os.path.exists(CONFIG_FILE):
-        print(f"Error: Could not find {CONFIG_FILE}. Please configure your smart lights first.")
-        sys.exit(1)
-    
-    with open(CONFIG_FILE, "r") as f:
-        config = json.load(f)
-
-    # Automatic migration: if an old plaintext password exists, move it to Keyring
-    creds = config.get("credentials", {})
-    user = creds.get("username", "")
-    pwd = creds.get("password", "")
-    if user and pwd and pwd != "USE_KEYRING":
-        try:
-            import keyring
-            keyring.set_password("DesktopLEDSync", user, pwd)
-            config["credentials"]["password"] = "USE_KEYRING"
-            with open(CONFIG_FILE, "w") as f:
-                json.dump(config, f, indent=2)
-            print("Successfully migrated plaintext password to secure Windows Keyring.")
-        except Exception as e:
-            print(f"Failed to migrate password to Keyring: {e}")
-            
-    return config
+DEFAULT_POLL_INTERVAL = 1.5
+CONNECT_TIMEOUT_SECONDS = 20
+# Windows often updates the track title before the thumbnail, so a missing or unchanged
+# thumbnail is re-checked for this many polls before we accept it
+MAX_ART_ATTEMPTS = 3
 
 # --- Media Extraction Logic ---
 async def get_media_session():
@@ -67,41 +50,48 @@ async def get_media_session():
     session_manager = await MediaManager.request_async()
     return session_manager.get_current_session()
 
-async def get_thumbnail_stream(session):
-    """Asks Windows for the album art reference of the current media"""
-    media_properties = await session.try_get_media_properties_async()
-    if media_properties and media_properties.thumbnail:
-        return media_properties.thumbnail
-    return None
+async def read_thumbnail_bytes(thumbnail_ref):
+    """Reads the album art Windows Runtime stream into a standard Python byte string"""
+    if thumbnail_ref is None:
+        return None
 
-async def read_stream_into_bytes(thumbnail_ref: IRandomAccessStreamReference) -> bytes:
-    """Reads the Windows Runtime stream into a standard Python byte array"""
+    stream = None
+    reader = None
     try:
-        # Open the stream
         stream = await thumbnail_ref.open_read_async()
-        
+        size = stream.size
+        if not size:
+            return None
+
         # Read the stream using a DataReader
         reader = DataReader(stream.get_input_stream_at(0))
-        await reader.load_async(stream.size)
-        
+        await reader.load_async(size)
+
         # The Windows Runtime buffer requires a specific read pattern in python
         # We need to extract the bytes manually into a standard python format
-        buffer = bytearray(stream.size)
+        buffer = bytearray(size)
         reader.read_bytes(buffer)
         return bytes(buffer)
     except Exception as e:
-        print(f"Error reading media stream: {e}")
+        log("error", f"Error reading album art: {e}")
         return None
+    finally:
+        for closable in (reader, stream):
+            if closable is not None:
+                try:
+                    closable.close()
+                except Exception:
+                    pass
 
 def get_dominant_color(image_bytes):
     """Uses colorthief to find the most prominent vibrant color"""
     if not image_bytes:
         return None
-        
+
     try:
         image_stream = BytesIO(image_bytes)
         color_thief = ColorThief(image_stream)
-        
+
         # Pull 5 dominant colors and choose the first vibrant one
         palette = color_thief.get_palette(color_count=5)
         for color in palette:
@@ -110,125 +100,260 @@ def get_dominant_color(image_bytes):
             saturation = max(r, g, b) - min(r, g, b)
             if saturation > 50:
                 return color
-                
+
         # Fallback to absolute dominant if no vibrant colors are found
         return color_thief.get_color(quality=1)
     except Exception as e:
-        print(f"Error extracting color: {e}")
+        log("error", f"Error extracting color: {e}")
         return None
 
 # --- Provider Factory ---
 def initialize_provider(config):
     provider_name = config.get("provider", "").lower()
-    
+
     if provider_name == "tapo":
-        return TapoProvider(config)
+        return TapoProvider(config, log)
     elif provider_name == "wled":
-        return WLEDProvider(config)
+        return WLEDProvider(config, log)
     else:
-        log("error", f"Unknown provider '{provider_name}' in config.json")
-        sys.exit(1)
+        raise ValueError(f"Unknown provider '{provider_name}' in config.json")
+
+# --- Helpers ---
+class LiveConfig:
+    """Re-reads config.json only when it changes on disk, keeping the last good copy."""
+
+    def __init__(self, initial):
+        self.data = initial
+        self._mtime = self._get_mtime()
+
+    @staticmethod
+    def _get_mtime():
+        try:
+            return os.stat(CONFIG_PATH).st_mtime_ns
+        except OSError:
+            return None
+
+    def refresh(self):
+        mtime = self._get_mtime()
+        if mtime is not None and mtime != self._mtime:
+            # Remember the mtime even on failure so a broken file is only reported once
+            self._mtime = mtime
+            try:
+                self.data = read_config()
+            except ConfigError as e:
+                log("error", f"Ignoring config change: {e}")
+        return self.data
+
+
+class LightCommander:
+    """
+    Sends commands to the lights one at a time, in order. If several commands are queued
+    while one is in flight, only the newest is kept, so the lights always end on the latest state.
+    """
+
+    def __init__(self):
+        self._pending = None
+        self._wakeup = asyncio.Event()
+        self._task = asyncio.create_task(self._run())
+
+    def submit(self, command):
+        """Queue a zero-argument coroutine function to run against the lights."""
+        self._pending = command
+        self._wakeup.set()
+
+    async def _run(self):
+        while True:
+            await self._wakeup.wait()
+            self._wakeup.clear()
+            command, self._pending = self._pending, None
+            if command is None:
+                continue
+            try:
+                await command()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                log("error", f"Failed to update lights: {e}")
+
+    async def close(self):
+        self._task.cancel()
+        try:
+            await self._task
+        except asyncio.CancelledError:
+            pass
+
+
+async def sleep_unless_stopped(seconds, is_stopped):
+    """Sleep for the given time, waking early if a stop is requested."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + seconds
+    while not is_stopped():
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return
+        await asyncio.sleep(min(0.1, remaining))
 
 # --- Main Event Loop ---
-async def main():
+async def main(stop_event=None):
+    """Run the sync engine until stop_event (a threading.Event) is set."""
+    def is_stopped():
+        return stop_event is not None and stop_event.is_set()
+
     log("info", "Desktop LED Sync - Initializing...")
-    config = load_config()
-    log("info", f"Provider: {config.get('provider')} @ {config.get('ip_address')}")
-    
-    # Initialize the specific brand of lights the user has
-    provider = initialize_provider(config)
     try:
-        await provider.connect()
+        config = read_config()
+    except ConfigError as e:
+        log("error", str(e))
+        return
+
+    try:
+        if migrate_plaintext_password(config):
+            log("info", "Moved plaintext password into Windows Credential Manager.")
+    except Exception as e:
+        log("error", f"Failed to migrate password to Keyring: {e}")
+
+    log("info", f"Provider: {config.get('provider')} @ {config.get('ip_address')}")
+
+    # Initialize the specific brand of lights the user has
+    try:
+        provider = initialize_provider(config)
+    except ValueError as e:
+        log("error", str(e))
+        return
+
+    try:
+        await asyncio.wait_for(provider.connect(), CONNECT_TIMEOUT_SECONDS)
         log("ok", f"Connected to {config.get('provider')} at {config.get('ip_address')}")
+    except asyncio.TimeoutError:
+        log("error", f"Failed to connect: no response from {config.get('ip_address')}")
+        await provider.close()
+        return
     except Exception as e:
         log("error", f"Failed to connect: {e}")
+        await provider.close()
         return
-    
-    last_known_title = None
-    last_applied_idle_key = None  # Tracks (behavior, color) that was last sent to device
-    last_known_color = None       # Tracks the RGB value of the current song
-    last_match_brightness = config.get("settings", {}).get("match_brightness", False)
-    
-    poll_interval = config.get("settings", {}).get("poll_interval_seconds", 1.5)
+
+    commander = LightCommander()
+    try:
+        if not is_stopped():
+            await sync_loop(provider, commander, LiveConfig(config), is_stopped)
+    finally:
+        await commander.close()
+        await provider.close()
+
+
+async def sync_loop(provider, commander, live_config, is_stopped):
+    current_track = None        # (title, artist, album) currently shown on the lights
+    art_pending = False         # True until album art has been applied for current_track
+    art_attempts = 0
+    last_art_hash = None        # Hash of the album art the current color came from
+    last_color = None           # RGB value of the current song
+    color_brightness = None     # match_brightness value last_color was sent with
+    last_idle_key = None        # Tracks the idle settings that were last sent to the device
+    last_error = None
 
     log("info", "Listening for media changes on Windows...")
-    
-    while stop_event is None or not stop_event.is_set():
+
+    while not is_stopped():
+        # Re-read settings each tick so GUI changes are picked up live
+        settings = live_config.refresh().get("settings", {})
+        match_brightness = bool(settings.get("match_brightness", False))
+        try:
+            poll_interval = max(0.2, float(settings.get("poll_interval_seconds", DEFAULT_POLL_INTERVAL)))
+        except (TypeError, ValueError):
+            poll_interval = DEFAULT_POLL_INTERVAL
+
         try:
             session = await get_media_session()
-            if session:
-                playback_info = session.get_playback_info()
-                
-                # We only care when music is actively playing
-                if playback_info.playback_status == PlaybackStatus.PLAYING:
-                    media_props = await session.try_get_media_properties_async()
-                    current_title = media_props.title
-                    
-                    # Reset idle tracker whenever music is playing
-                    last_applied_idle_key = None
+            status = session.get_playback_info().playback_status if session else None
 
-                    # Check if 'Match Brightness' was toggled live in the GUI
-                    live_config = load_config()
-                    current_match_brightness = live_config.get("settings", {}).get("match_brightness", False)
+            if status == PlaybackStatus.PLAYING:
+                last_idle_key = None
+                media_props = await session.try_get_media_properties_async()
+                track = (media_props.title, media_props.artist, media_props.album_title)
 
-                    # Did the song change or did the brightness setting change?
-                    if current_title != last_known_title or current_match_brightness != last_match_brightness:
-                        if current_title != last_known_title:
-                            log("ok", f"Now Playing: {current_title} — {media_props.artist}")
-                            last_known_title = current_title
+                if track != current_track:
+                    current_track = track
+                    art_pending = True
+                    art_attempts = 0
+                    log("ok", f"Now Playing: {media_props.title} — {media_props.artist}")
 
-                        last_match_brightness = current_match_brightness
-                        
-                        # Grab the album art
-                        thumb_ref = await get_thumbnail_stream(session)
-                        if thumb_ref:
-                            image_bytes = await read_stream_into_bytes(thumb_ref)
+                if art_pending:
+                    art_attempts += 1
+                    image_bytes = await read_thumbnail_bytes(media_props.thumbnail)
+                    art_hash = hashlib.sha1(image_bytes).digest() if image_bytes else None
+                    art_looks_stale = art_hash is None or art_hash == last_art_hash
+
+                    # Otherwise wait a poll: the thumbnail may still be the previous track's, or not loaded yet
+                    if not art_looks_stale or art_attempts >= MAX_ART_ATTEMPTS:
+                        art_pending = False
+                        if image_bytes is None:
+                            log("info", "No album art for this track.")
+                        else:
+                            last_art_hash = art_hash
                             color = get_dominant_color(image_bytes)
-                            
                             if color:
-                                last_known_color = color
-                                log("ok", f"Color set: RGB{color}" + (" (Match Brightness changed)" if current_title == last_known_title else ""))
-                                asyncio.create_task(provider.set_color(color))
+                                last_color = color
+                                color_brightness = match_brightness
+                                log("ok", f"Color set: RGB{color}")
+                                commander.submit(lambda c=color, m=match_brightness: provider.set_color(c, m))
                             else:
                                 log("error", "Could not extract color from album art.")
-                        else:
-                            log("info", "No album art for this track.")
-                            
-                elif playback_info.playback_status in [PlaybackStatus.PAUSED, PlaybackStatus.STOPPED]:
-                    # Re-read config on every idle tick so GUI changes are picked up live
-                    live_config = load_config()
-                    behavior = live_config.get("settings", {}).get("idle_behavior", "Do Nothing")
-                    
-                    # Backward compatibility mapping
-                    val_map = {"default_color": "Default Color", "turn_off": "Turn Off", "do_nothing": "Do Nothing"}
-                    behavior = val_map.get(behavior, behavior)
-                    
-                    idle_color = tuple(live_config.get("settings", {}).get("idle_color", [255, 200, 100]))
 
-                    # Build a key representing the current desired idle state
-                    current_idle_key = (behavior, idle_color)
+                elif last_color is not None and match_brightness != color_brightness:
+                    # 'Match Brightness' was toggled live in the GUI
+                    color_brightness = match_brightness
+                    log("ok", f"Color set: RGB{last_color} (Match Brightness changed)")
+                    commander.submit(lambda c=last_color, m=match_brightness: provider.set_color(c, m))
 
-                    # Only send a command when the settings have actually changed
-                    if current_idle_key != last_applied_idle_key:
-                        last_known_title = "IDLE_STATE"
-                        last_applied_idle_key = current_idle_key
-                        log("info", "Idle state — applying idle settings.")
+            elif status != PlaybackStatus.CHANGING:
+                # Paused, stopped, closed, or no media app at all
+                behavior = normalize_idle_behavior(settings.get("idle_behavior", "Do Nothing"))
+                idle_color = parse_rgb(settings.get("idle_color")) or DEFAULT_IDLE_COLOR
+                current_idle_key = (behavior, idle_color, match_brightness)
 
-                        if behavior == "Turn Off":
-                            log("info", "Idle: Turning lights off.")
-                            asyncio.create_task(provider.set_color((0, 0, 0)))
-                        elif behavior == "Default Color":
-                            log("info", f"Idle: Default color RGB{idle_color}")
-                            asyncio.create_task(provider.set_color(idle_color))
-                        else:
-                            log("info", "Idle: Keeping last color.")
-                            
+                # Only send a command when the settings have actually changed
+                if current_idle_key != last_idle_key:
+                    last_idle_key = current_idle_key
+                    # Re-apply the album art color when playback resumes
+                    current_track = None
+                    last_art_hash = None
+                    art_pending = False
+                    last_color = None
+                    color_brightness = None
+                    log("info", "Idle state — applying idle settings.")
+
+                    if behavior == "Turn Off":
+                        log("info", "Idle: Turning lights off.")
+                        commander.submit(provider.turn_off)
+                    elif behavior == "Default Color":
+                        log("info", f"Idle: Default color RGB{idle_color}")
+                        commander.submit(lambda c=idle_color, m=match_brightness: provider.set_color(c, m))
+                    else:
+                        log("info", "Idle: Keeping last color.")
+
+            last_error = None
         except Exception as e:
-            log("error", f"Media loop error: {e}")
-            
-        await asyncio.sleep(poll_interval)
+            # Don't flood the log with the same failure every tick
+            if str(e) != last_error:
+                log("error", f"Media loop error: {e}")
+                last_error = str(e)
+
+        await sleep_unless_stopped(poll_interval, is_stopped)
+
+
+def run(stop_event=None):
+    """Run the engine on a fresh event loop in the current thread, blocking until it stops."""
+    # Selector loop on Windows: the default Proactor loop misbehaves with the providers' network clients
+    loop = asyncio.SelectorEventLoop() if sys.platform == "win32" else asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(main(stop_event))
+        loop.run_until_complete(loop.shutdown_asyncgens())
+    finally:
+        asyncio.set_event_loop(None)
+        loop.close()
+
 
 if __name__ == "__main__":
-    # Workaround for ProactorEventLoop on Windows
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    asyncio.run(main())
+    run()

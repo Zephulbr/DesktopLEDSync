@@ -10,7 +10,7 @@ Crucially, this application acts as a **standalone desktop client**. It sits ent
 - **Live Album Art Extraction:** Grabs the thumbnail of the currently playing song and runs it through a `colorthief` algorithm to find the dominant RGB color.
 - **Provider Architecture:** Built with an extensible plugin system. Currently supports encrypted local **Tapo** connections and unauthenticated JSON **WLED** endpoints.
 - **Custom Idle Behaviors:** Define exactly what your lights do when you pause the music (Turn Off, switch to a Default Color, or Do Nothing).
-- **System Integration:** Completely native feel. Can be set to auto-start with Windows and seamlessly minimizes to the system tray.
+- **System Integration:** Completely native feel. Can be set to auto-start with Windows, where it starts syncing straight away from the system tray, and seamlessly minimizes to the tray.
 
 ## How it Works (The Architecture)
 
@@ -35,7 +35,8 @@ A highly polished, dark-mode desktop interface built using `customtkinter`.
 * It completely eliminates the need for users to touch JSON configuration files.
 * **Thread-Safe Log Panel:** Provides live colored terminal output directly in the app, showing real-time connectivity status, hex color codes, and errors across threads.
 * **Native Touches:** Utilizes Segoe Fluent Windows icons for a premium OS-native look, custom color pickers, tooltips, and a fully functional right-click system tray menu (`pystray`). 
-* **State Management:** When you toggle a setting like "Match Brightness," it saves to `config.json` instantly, and the Core Engine reads that live file so changes happen without restarting the app.
+* **State Management:** When you toggle a setting like "Match Brightness," it saves to `config.json` instantly, and the Core Engine picks up the change so it applies without restarting the app.
+* **Credentials:** Your Tapo password is stored in Windows Credential Manager (via `keyring`), never in `config.json`.
 
 ## Building the Executable
 
@@ -44,7 +45,6 @@ To build the application yourself into a portable executable, you will need Pyth
 Install the required packages:
 ```bash
 pip install -r requirements.txt
-pip install pyinstaller
 ```
 
 Run the build script:
@@ -52,4 +52,4 @@ Run the build script:
 python build.py
 ```
 
-The standalone `.exe` will be found in the `dist` directory.
+The standalone `.exe` will be found in the `dist` directory. Your `config.json` is not bundled into it; the app creates its own `config.json` next to the `.exe` the first time you save settings.

@@ -1,5 +1,6 @@
 import requests
 import asyncio
+import colorsys
 from . import LightProvider
 
 class WLEDProvider(LightProvider):
@@ -7,8 +8,8 @@ class WLEDProvider(LightProvider):
     Provider for WLED smart lights.
     WLED uses a completely open, unauthenticated REST API.
     """
-    def __init__(self, config):
-        super().__init__(config)
+    def __init__(self, config, log=None):
+        super().__init__(config, log)
         self.api_url = f"http://{self.ip_address}/json/state"
         self.info_url = f"http://{self.ip_address}/json/info"
 
@@ -26,35 +27,35 @@ class WLEDProvider(LightProvider):
         except Exception as e:
             raise ConnectionError(f"Could not reach WLED device at {self.ip_address}: {e}")
 
-    async def set_color(self, rgb_tuple):
+    async def set_color(self, rgb_tuple, match_brightness=False):
         """Send the JSON payload to change the light color."""
         r, g, b = rgb_tuple
 
-        payload = {
-            "on": True,
-            "bri": 255,  # Full brightness
-            # TODO: add "transition": <deciseconds> here for smooth cross-fades
-            # e.g. "transition": 15 = 1.5 second fade (WLED uses deciseconds)
-            "seg": [
-                {
-                    "id": 0,
-                    "col": [[r, g, b]]
-                }
-            ]
-        }
+        # TODO: add "transition": <deciseconds> here for smooth cross-fades
+        # e.g. "transition": 15 = 1.5 second fade (WLED uses deciseconds)
+        payload = {"on": True}
 
+        if match_brightness and (r or g or b):
+            # Send the hue at full value and let WLED's master brightness carry the album art's value,
+            # with the same 10% floor the Tapo provider uses
+            h, s, v = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
+            r, g, b = (round(c * 255) for c in colorsys.hsv_to_rgb(h, s, 1.0))
+            payload["bri"] = max(26, round(v * 255))
+        # Otherwise leave "bri" out so the brightness set in WLED itself is kept
+
+        payload["seg"] = [{"id": 0, "col": [[r, g, b]]}]
+        await self._post_state(payload)
+
+    async def turn_off(self):
+        await self._post_state({"on": False})
+        self._log("info", "[WLED] Lights turned off (idle).")
+
+    async def _post_state(self, payload):
         try:
             response = await asyncio.to_thread(
                 requests.post, self.api_url, json=payload, timeout=2
             )
-            if response.status_code != 200:
-                self._log("error", f"[WLED] Error setting color (HTTP {response.status_code})")
         except Exception as e:
-            self._log("error", f"[WLED] Failed to send color: {e}")
-
-    def _log(self, level, message):
-        """Forward log messages to the GUI queue if available, else print."""
-        import core
-        print(message)
-        if core.log_queue is not None:
-            core.log_queue.put((level, message))
+            raise ConnectionError(f"[WLED] Failed to reach {self.ip_address}: {e}") from e
+        if response.status_code != 200:
+            raise ConnectionError(f"[WLED] Error setting state (HTTP {response.status_code})")

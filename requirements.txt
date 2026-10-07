@@ -1,14 +1,19 @@
-winsdk
-colorthief
-Pillow
-requests
+# Windows media controls (the older 'winsdk' package also works if already installed)
+winrt-runtime>=2.0,<4
+winrt-Windows.Foundation>=2.0,<4
+winrt-Windows.Foundation.Collections>=2.0,<4
+winrt-Windows.Media.Control>=2.0,<4
+winrt-Windows.Storage.Streams>=2.0,<4
+# Color extraction
+colorthief>=0.2.1
+Pillow>=10.0
+requests>=2.31
 # Specific libraries for light providers
-plugp100
+plugp100>=5.0,<6
 # User Interface
-customtkinter
-pystray
-Pillow
+customtkinter>=5.2,<6
+pystray>=0.19
 # Auto-Start
-winshell
-pypiwin32
-keyring
+winshell>=0.6
+pywin32>=306
+keyring>=24.0
