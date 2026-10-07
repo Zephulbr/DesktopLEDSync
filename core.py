@@ -19,6 +19,7 @@ def log(level, message):
         log_queue.put((level, message))
 
 from colorthief import ColorThief
+from version import __version__
 
 # Light Providers
 from providers.tapo import TapoProvider
@@ -253,7 +254,7 @@ async def main(stop_event=None):
     def is_stopped():
         return stop_event is not None and stop_event.is_set()
 
-    log("info", "Desktop LED Sync - Initializing...")
+    log("info", f"Desktop LED Sync {__version__} - Initializing...")
     try:
         config = read_config()
     except ConfigError as e:
