@@ -1,55 +1,75 @@
 # Desktop LED Sync
 
-Desktop LED Sync is a standalone Windows application designed to automatically extract the dominant color from your currently playing music's album art (Tidal, Spotify, Apple Music) and push those colors to your smart LED strips in real-time.
+Match your smart LED lights to the album art of whatever you're listening to on Windows.
 
-Crucially, this application acts as a **standalone desktop client**. It sits entirely on your local network and communicates directly with your lights via your local Wi-Fi, making it a perfect lightweight solution for users who want dynamic lighting without needing to configure a full home automation server ecosystem.
+Desktop LED Sync picks the dominant color from the current track's album art and sends it straight to your lights over your local Wi-Fi. It works with Spotify, Tidal, Apple Music, browsers, and any other app that shows up in the Windows media controls. There's no Home Assistant or other home-automation server to set up.
 
-## Core Features
-- **Standalone Local Application:** Runs quietly in the background on your Windows PC, offering an alternative for users who don't have a Home Assistant instance running.
-- **Universal Media Detection:** Automatically detects track changes across any app that uses standard Windows Media Controls (Tidal, Spotify, browsers, etc.).
-- **Live Album Art Extraction:** Grabs the thumbnail of the currently playing song and runs it through a `colorthief` algorithm to find the dominant RGB color.
-- **Provider Architecture:** Built with an extensible plugin system. Currently supports encrypted local **Tapo** connections and unauthenticated JSON **WLED** endpoints.
-- **Custom Idle Behaviors:** Define exactly what your lights do when you pause the music (Turn Off, switch to a Default Color, or Do Nothing).
-- **System Integration:** Completely native feel. Can be set to auto-start with Windows, where it starts syncing straight away from the system tray, and seamlessly minimizes to the tray.
+**Supported lights:** TP-Link **Tapo** and **WLED**
 
-## How it Works (The Architecture)
+## Features
 
-The application is split into three main layers to guarantee high performance and easy extensibility.
+- **Works with any media app** that uses the standard Windows media controls
+- **Album art colors** pick the most vibrant color in the artwork, updated on every track change
+- **Match brightness** (optional) dims the lights for darker album art
+- **Idle behavior** controls what happens when you pause: switch to a default color, turn off, or keep the last color
+- **Runs in the tray** and can start automatically with Windows, syncing in the background
+- **Local and private:** talks to your lights directly on your network, and your Tapo password is stored in Windows Credential Manager, not in a file
 
-### 1. The Core Engine (`core.py` )
-This is the heart of the application. It runs a lightweight, asynchronous loop in the background.
-* It leverages the `winsdk` Python library to hook directly into the **Windows System Media Transport Controls (SMTC)**.
-* When a song starts or changes, Windows hands the engine a direct memory stream of the album art thumbnail.
-* The engine passes these bytes to `colorthief`, which calculates the most dominant `(R, G, B)` color values.
-* It monitors live GUI toggles (like "Match Album Art Brightness") to calculate the final HSV values and hands them off to a loaded Provider.
+## Download
 
-### 2. The Modular Providers (`providers/`)
-Because every smart light brand speaks a different language, the engine doesn't know *how* to talk to the lights. It just says "Set the color to Red." The Providers handle the translations:
-* **Tapo (`providers/tapo.py`):** TP-Link Tapo lights require complex, local AES-128 encryption and session handshakes. This provider handles the secure login, decrypts the token, and translates the RGB color into the Hue/Saturation format Tapo expects.
-* **WLED (`providers/wled.py`):** WLED controllers are entirely open. This provider simply constructs a lightweight JSON payload and fires it via an HTTP POST request to the strip's IP address.
+1. Grab `DesktopLEDSync.exe` from the [latest release](https://github.com/Zephulbr/DesktopLEDSync/releases/latest).
+2. Put it in its own folder. It saves its settings to `config.json` next to the `.exe`.
+3. Run it. Windows SmartScreen may warn about an unrecognized app because the `.exe` isn't code-signed; choose **More info → Run anyway**.
 
-*Because of this architecture, adding Philips Hue, Govee, or Nanoleaf support in the future simply requires dropping a new `.py` file into the `providers/` folder.*
+Requires Windows 10 or 11.
 
-### 3. The User Interface (`gui.py`)
-A highly polished, dark-mode desktop interface built using `customtkinter`. 
-* It completely eliminates the need for users to touch JSON configuration files.
-* **Thread-Safe Log Panel:** Provides live colored terminal output directly in the app, showing real-time connectivity status, hex color codes, and errors across threads.
-* **Native Touches:** Utilizes Segoe Fluent Windows icons for a premium OS-native look, custom color pickers, tooltips, and a fully functional right-click system tray menu (`pystray`). 
-* **State Management:** When you toggle a setting like "Match Brightness," it saves to `config.json` instantly, and the Core Engine picks up the change so it applies without restarting the app.
-* **Credentials:** Your Tapo password is stored in Windows Credential Manager (via `keyring`), never in `config.json`.
+## Setup
 
-## Building the Executable
+1. Choose your **Light Brand** (`tapo` or `wled`).
+2. Enter your light's **IP address**.
+   - **Tapo:** Tapo app → your device → Settings → Device Info.
+   - **WLED:** your router's list of connected devices, or the WLED app.
+3. **Tapo only:** enter your Tapo account email and password (needed for local login).
+4. Click **Save & Apply**, then **Start Syncing** and play some music.
 
-To build the application yourself into a portable executable, you will need Python installed. 
+### Settings
 
-Install the required packages:
+| Setting | What it does |
+| --- | --- |
+| When Music Pauses | **Default Color** switches to a color you pick, **Turn Off** powers the lights off, **Do Nothing** keeps the last album color |
+| Idle Color | The color used by *Default Color*, as `R,G,B` (0-255) or picked with the color chooser |
+| When Closing App | Ask each time, minimize to the tray, or exit |
+| Match album art brightness | Dims the lights for darker artwork instead of always using full brightness |
+| Run in background when PC starts | Starts with Windows, hidden in the tray, and begins syncing right away |
+
+IP address, provider and account changes take effect when you click **Save & Apply**. Everything else applies instantly, even while syncing.
+
+## Troubleshooting
+
+- **"Failed to connect"**: check the IP address, and that the PC and lights are on the same network. Tapo bulbs can change IP after a router restart, so a reserved/static IP helps.
+- **Tapo login errors**: double-check the email and password of the Tapo account the bulb is registered to.
+- **Colors don't change**: make sure your player shows the track in the Windows media flyout (the volume popup). If it doesn't appear there, the app can't see it either.
+- **"No album art for this track"**: the player isn't sharing artwork with Windows for that track. The lights keep their current color.
+
+## Building from Source
+
+You need Windows and Python 3.10 or newer.
+
 ```bash
 pip install -r requirements.txt
+python gui.py        # run directly
+python build.py      # or build dist/DesktopLEDSync.exe
 ```
 
-Run the build script:
-```bash
-python build.py
-```
+Releases are built automatically by GitHub Actions: pushing a tag like `v1.0.1` builds the `.exe` and attaches it to a new release.
 
-The standalone `.exe` will be found in the `dist` directory. Your `config.json` is not bundled into it; the app creates its own `config.json` next to the `.exe` the first time you save settings.
+## How It Works
+
+| Part | Role |
+| --- | --- |
+| `core.py` | Background engine. Reads the current track and album art from the Windows media controls, extracts the color with `colorthief`, and sends it to the lights. |
+| `providers/` | One file per light brand that turns "set this color" into the brand's own protocol: Tapo's encrypted local API or WLED's JSON API. |
+| `gui.py` | The `customtkinter` settings window, live log, and tray icon. |
+| `config_store.py` | Reads and writes `config.json`, and keeps the Tapo password in Windows Credential Manager. |
+
+To add another brand (Hue, Govee, Nanoleaf...), add a `LightProvider` subclass in `providers/` implementing `connect`, `set_color` and `turn_off`, then register it in `initialize_provider` in `core.py` and in the provider dropdown in `gui.py`.
