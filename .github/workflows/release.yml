@@ -1,0 +1,55 @@
+name: Build and Release
+
+# Publishes DesktopLEDSync.exe as a GitHub release when either:
+#   - a tag like v1.1.0 is pushed, or
+#   - it is run from the Actions tab with a version filled in (the tag is created for you).
+# Run it from the Actions tab with the version left blank to just build the .exe as an artifact.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version to publish, e.g. v1.1.0 (leave blank to only build)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Check the app imports cleanly
+        run: python -c "import core, gui"
+
+      - name: Build executable
+        run: python build.py
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DesktopLEDSync
+          path: dist/DesktopLEDSync.exe
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/') || inputs.version != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.version || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          files: dist/DesktopLEDSync.exe
+          generate_release_notes: true
