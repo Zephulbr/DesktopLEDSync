@@ -9,6 +9,7 @@ Desktop LED Sync picks the dominant color from the current track's album art and
 ## Features
 
 - **Works with any media app** that uses the standard Windows media controls
+- **Preferred app** keeps the lights on, say, Spotify even when a YouTube video is also playing
 - **Album art colors** pick the most vibrant color in the artwork, updated on every track change
 - **Smooth color fades** blend the lights into each new color instead of jumping
 - **Match brightness** (optional) dims the lights for darker album art
@@ -37,12 +38,14 @@ Requires Windows 10 or 11.
 
 | Setting | What it does |
 | --- | --- |
+| Preferred app | When several apps are playing, follow this one. *Any app* follows whatever Windows shows in its media controls. Browsers count as one app (Chrome, Edge, Firefox...), whatever site is playing |
+| Only follow the preferred app | Ignore every other app, even while the preferred one is paused or closed |
 | When music pauses | **Default Color** switches to a color you pick, **Turn Off** powers the lights off, **Do Nothing** keeps the last album color |
 | Idle color | The color used by *Default Color*, as `R,G,B` (0-255) or picked with the color chooser |
 | When closing the window | Ask each time, minimize to the tray, or exit |
 | Color fade | How many seconds the lights take to blend into a new color (0 switches instantly) |
 | Match album art brightness | Dims the lights for darker artwork instead of always using full brightness |
-| Mica background | Windows 11 only: tints the window with your wallpaper. Turn it off if the window looks black |
+| Mica background | Windows 11 only, off by default: tints the window with your wallpaper. Turn it back off if the window looks black |
 | Start with Windows | Starts with Windows, hidden in the tray, and begins syncing right away |
 
 IP address, provider and account changes take effect when you click **Save & apply**. Everything else applies instantly, even while syncing.
@@ -52,7 +55,9 @@ IP address, provider and account changes take effect when you click **Save & app
 - **"Failed to connect"**: check the IP address, and that the PC and lights are on the same network. Tapo bulbs can change IP after a router restart, so a reserved/static IP helps.
 - **Tapo login errors**: double-check the email and password of the Tapo account the bulb is registered to.
 - **Colors don't change**: make sure your player shows the track in the Windows media flyout (the volume popup). If it doesn't appear there, the app can't see it either.
-- **The window looks black**: on Windows 11 the app uses the Mica backdrop. It switches to a solid background by itself when Windows can't draw Mica (transparency effects off, battery saver, Remote Desktop, high contrast). If it still looks black, which some graphics drivers and virtual machines cause, turn off **Mica background** in the app's settings.
+- **The window looks black**: you've turned on **Mica background** and Windows can't draw it (transparency effects off, battery saver, Remote Desktop, high contrast, some graphics drivers and virtual machines). Turn it off again in the app's settings.
+- **The lights follow the wrong app**: set **Preferred app** to the app you want them to follow, and turn on **Only follow the preferred app** to ignore everything else.
+- **"Failed to save settings: Access is denied"**: something, usually antivirus or a cloud sync folder, is holding `config.json`. The app now falls back to overwriting the file in place, but if it still fails, move the `.exe` into a folder of its own outside Downloads.
 - **"No album art for this track"**: the player isn't sharing artwork with Windows for that track. The lights keep their current color.
 
 ## Building from Source
@@ -76,6 +81,7 @@ Releases are built by GitHub Actions on a Windows runner. Merging a change that 
 | `core.py` | Background engine. Reads the current track and album art from the Windows media controls, extracts the color with `colorthief`, and sends it to the lights. |
 | `providers/` | One file per light brand that turns "set this color" into the brand's own protocol: Tapo's encrypted local API or WLED's JSON API. |
 | `gui.py` | The `customtkinter` settings window, live log, and tray icon. |
+| `media_apps.py` | Names the media apps Windows reports and picks which one to follow. |
 | `config_store.py` | Reads and writes `config.json`, and keeps the Tapo password in Windows Credential Manager. |
 
 To add another brand (Hue, Govee, Nanoleaf...), add a `LightProvider` subclass in `providers/` implementing `connect`, `set_color` and `turn_off`, then register it in `initialize_provider` in `core.py` and in the provider dropdown in `gui.py`.
