@@ -20,7 +20,7 @@ Desktop LED Sync picks the dominant color from the current track's album art and
 ## Download
 
 1. Grab `DesktopLEDSync.exe` from the [latest release](https://github.com/Zephulbr/DesktopLEDSync/releases/latest).
-2. Put it in its own folder. It saves its settings to `config.json` next to the `.exe`.
+2. Put it anywhere you like. It saves its settings to `%APPDATA%\DesktopLEDSync\config.json` (versions before 1.4.0 kept them next to the `.exe`; they're copied over automatically).
 3. Run it. Windows SmartScreen may warn about an unrecognized app because the `.exe` isn't code-signed; choose **More info → Run anyway**.
 
 Requires Windows 10 or 11.
@@ -57,7 +57,7 @@ IP address, provider and account changes take effect when you click **Save & app
 - **Colors don't change**: make sure your player shows the track in the Windows media flyout (the volume popup). If it doesn't appear there, the app can't see it either.
 - **The window looks black**: you've turned on **Mica background** and Windows can't draw it (transparency effects off, battery saver, Remote Desktop, high contrast, some graphics drivers and virtual machines). Turn it off again in the app's settings.
 - **The lights follow the wrong app**: set **Preferred app** to the app you want them to follow, and turn on **Only follow the preferred app** to ignore everything else.
-- **"Failed to save settings: Access is denied"**: something, usually antivirus or a cloud sync folder, is holding `config.json`. The app now falls back to overwriting the file in place, but if it still fails, move the `.exe` into a folder of its own outside Downloads.
+- **"Failed to save settings: Access is denied"**: fixed in 1.4.0, which keeps settings in `%APPDATA%\DesktopLEDSync` instead of next to the `.exe`, where antivirus could lock the file (especially in Downloads).
 - **"No album art for this track"**: the player isn't sharing artwork with Windows for that track. The lights keep their current color.
 
 ## Building from Source
@@ -82,6 +82,6 @@ Releases are built by GitHub Actions on a Windows runner. Merging a change that 
 | `providers/` | One file per light brand that turns "set this color" into the brand's own protocol: Tapo's encrypted local API or WLED's JSON API. |
 | `gui.py` | The `customtkinter` settings window, live log, and tray icon. |
 | `media_apps.py` | Names the media apps Windows reports and picks which one to follow. |
-| `config_store.py` | Reads and writes `config.json`, and keeps the Tapo password in Windows Credential Manager. |
+| `config_store.py` | Reads and writes `config.json` in `%APPDATA%\DesktopLEDSync`, and keeps the Tapo password in Windows Credential Manager. |
 
 To add another brand (Hue, Govee, Nanoleaf...), add a `LightProvider` subclass in `providers/` implementing `connect`, `set_color` and `turn_off`, then register it in `initialize_provider` in `core.py` and in the provider dropdown in `gui.py`.

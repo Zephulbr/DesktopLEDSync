@@ -19,7 +19,7 @@ import fluent
 from fluent import C
 import media_apps
 from config_store import (
-    DEFAULT_IDLE_COLOR, IDLE_BEHAVIORS, KEYRING_PLACEHOLDER, KEYRING_SERVICE,
+    CONFIG_PATH, DEFAULT_IDLE_COLOR, IDLE_BEHAVIORS, KEYRING_PLACEHOLDER, KEYRING_SERVICE, migrate_legacy_config,
     normalize_idle_behavior, parse_rgb, parse_transition_seconds, read_config, resolve_password, write_config,
 )
 from version import __version__
@@ -67,7 +67,14 @@ class DesktopLEDSyncGUI(ctk.CTk):
         # Intercept the 'X' close button to hide the window instead
         self.protocol('WM_DELETE_WINDOW', self.hide_window)
 
-        # Load existing config or defaults
+        # Bring settings over from where older versions kept them, then load them (or defaults)
+        startup_messages = []
+        try:
+            migrated_from = migrate_legacy_config()
+            if migrated_from:
+                startup_messages.append((f"Moved settings from {migrated_from} to {CONFIG_PATH}.", "info"))
+        except Exception as e:
+            startup_messages.append((f"Could not copy settings from the app's folder: {e}", "error"))
         # (named app_config because Tk widgets already have a config() method)
         self.app_config = self.load_config()
         settings = self.app_config.setdefault("settings", {})
@@ -76,7 +83,6 @@ class DesktopLEDSyncGUI(ctk.CTk):
         # Thread-safe queues: log messages from the core engine, and UI calls from other threads
         self.log_queue = queue.Queue()
         self.ui_calls = queue.Queue()
-        startup_messages = []
 
         # Windows 11 styling: pick the colors for Mica (or a solid background), then build the widgets
         self._setup_fonts()

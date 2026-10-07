@@ -46,7 +46,7 @@ cmd = [
     "--version-file", version_file,
 
     # config.json is deliberately NOT bundled: it holds your account details, and the app
-    # reads/creates it next to the .exe on first run anyway.
+    # reads/creates it in %APPDATA%\DesktopLEDSync on first run anyway.
 
     # CustomTkinter needs its theme files explicitly bundled in Windows
     "--add-data", f"{os.path.dirname(ctk.__file__)};customtkinter",
