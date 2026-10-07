@@ -9,6 +9,8 @@ KEYRING_SERVICE = "DesktopLEDSync"
 KEYRING_PLACEHOLDER = "USE_KEYRING"
 DEFAULT_IDLE_COLOR = (255, 200, 100)
 IDLE_BEHAVIORS = ("Default Color", "Turn Off", "Do Nothing")
+DEFAULT_TRANSITION_SECONDS = 1.0
+MAX_TRANSITION_SECONDS = 5.0
 
 # Older configs stored idle behavior in snake_case
 _IDLE_BEHAVIOR_ALIASES = {"default_color": "Default Color", "turn_off": "Turn Off", "do_nothing": "Do Nothing"}
@@ -79,6 +81,17 @@ def parse_rgb(value):
 def normalize_idle_behavior(value):
     value = _IDLE_BEHAVIOR_ALIASES.get(value, value)
     return value if value in IDLE_BEHAVIORS else "Do Nothing"
+
+
+def parse_transition_seconds(value):
+    """Parse the color fade duration, falling back to the default when it is missing or invalid."""
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return DEFAULT_TRANSITION_SECONDS
+    if seconds != seconds:  # NaN
+        return DEFAULT_TRANSITION_SECONDS
+    return min(max(seconds, 0.0), MAX_TRANSITION_SECONDS)
 
 
 def resolve_password(credentials):

@@ -10,6 +10,7 @@ Desktop LED Sync picks the dominant color from the current track's album art and
 
 - **Works with any media app** that uses the standard Windows media controls
 - **Album art colors** pick the most vibrant color in the artwork, updated on every track change
+- **Smooth color fades** blend the lights into each new color instead of jumping
 - **Match brightness** (optional) dims the lights for darker album art
 - **Idle behavior** controls what happens when you pause: switch to a default color, turn off, or keep the last color
 - **Runs in the tray** and can start automatically with Windows, syncing in the background
@@ -25,30 +26,32 @@ Requires Windows 10 or 11.
 
 ## Setup
 
-1. Choose your **Light Brand** (`tapo` or `wled`).
+1. Choose your **Light brand** (`tapo` or `wled`).
 2. Enter your light's **IP address**.
    - **Tapo:** Tapo app → your device → Settings → Device Info.
    - **WLED:** your router's list of connected devices, or the WLED app.
 3. **Tapo only:** enter your Tapo account email and password (needed for local login).
-4. Click **Save & Apply**, then **Start Syncing** and play some music.
+4. Click **Save & apply**, then **Start syncing** and play some music.
 
 ### Settings
 
 | Setting | What it does |
 | --- | --- |
-| When Music Pauses | **Default Color** switches to a color you pick, **Turn Off** powers the lights off, **Do Nothing** keeps the last album color |
-| Idle Color | The color used by *Default Color*, as `R,G,B` (0-255) or picked with the color chooser |
-| When Closing App | Ask each time, minimize to the tray, or exit |
+| When music pauses | **Default Color** switches to a color you pick, **Turn Off** powers the lights off, **Do Nothing** keeps the last album color |
+| Idle color | The color used by *Default Color*, as `R,G,B` (0-255) or picked with the color chooser |
+| When closing the window | Ask each time, minimize to the tray, or exit |
+| Color fade | How many seconds the lights take to blend into a new color (0 switches instantly) |
 | Match album art brightness | Dims the lights for darker artwork instead of always using full brightness |
-| Run in background when PC starts | Starts with Windows, hidden in the tray, and begins syncing right away |
+| Start with Windows | Starts with Windows, hidden in the tray, and begins syncing right away |
 
-IP address, provider and account changes take effect when you click **Save & Apply**. Everything else applies instantly, even while syncing.
+IP address, provider and account changes take effect when you click **Save & apply**. Everything else applies instantly, even while syncing.
 
 ## Troubleshooting
 
 - **"Failed to connect"**: check the IP address, and that the PC and lights are on the same network. Tapo bulbs can change IP after a router restart, so a reserved/static IP helps.
 - **Tapo login errors**: double-check the email and password of the Tapo account the bulb is registered to.
 - **Colors don't change**: make sure your player shows the track in the Windows media flyout (the volume popup). If it doesn't appear there, the app can't see it either.
+- **The window looks wrong on Windows 11**: the app uses the Mica backdrop there. To use a plain background instead, close the app, set `"mica_background": false` under `"settings"` in `config.json`, and start it again.
 - **"No album art for this track"**: the player isn't sharing artwork with Windows for that track. The lights keep their current color.
 
 ## Building from Source

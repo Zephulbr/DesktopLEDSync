@@ -8,6 +8,8 @@ class WLEDProvider(LightProvider):
     Provider for WLED smart lights.
     WLED uses a completely open, unauthenticated REST API.
     """
+    supports_transitions = True
+
     def __init__(self, config, log=None):
         super().__init__(config, log)
         self.api_url = f"http://{self.ip_address}/json/state"
@@ -27,13 +29,12 @@ class WLEDProvider(LightProvider):
         except Exception as e:
             raise ConnectionError(f"Could not reach WLED device at {self.ip_address}: {e}")
 
-    async def set_color(self, rgb_tuple, match_brightness=False):
+    async def set_color(self, rgb_tuple, match_brightness=False, transition=0.0):
         """Send the JSON payload to change the light color."""
         r, g, b = rgb_tuple
 
-        # TODO: add "transition": <deciseconds> here for smooth cross-fades
-        # e.g. "transition": 15 = 1.5 second fade (WLED uses deciseconds)
-        payload = {"on": True}
+        # "tt" is a fade for this request only, in deciseconds (WLED's own default is left alone)
+        payload = {"on": True, "tt": round(transition * 10)}
 
         if match_brightness and (r or g or b):
             # Send the hue at full value and let WLED's master brightness carry the album art's value,
