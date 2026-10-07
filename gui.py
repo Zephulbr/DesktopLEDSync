@@ -28,18 +28,20 @@ BACKGROUND_FLAG = "--background"
 AUTOSTART_SHORTCUT_NAME = "DesktopLEDSyncGUI.lnk"
 MAX_LOG_LINES = 500
 TRANSITION_CHOICES = (0, 0.25, 0.5, 1, 1.5, 2, 3, 5)
+MICA_CHECK_INTERVAL_MS = 3000
 
 # Segoe Fluent Icons (Windows 11) / Segoe MDL2 Assets (Windows 10) glyphs
-ICON_INFO = ""
-ICON_LIGHTBULB = ""
-ICON_NETWORK = ""
-ICON_ACCOUNT = ""
-ICON_PAUSE = ""
-ICON_COLOR = ""
-ICON_BRIGHTNESS = ""
-ICON_CLOSE = ""
-ICON_POWER = ""
-ICON_LOG = ""
+ICON_INFO = "\uE946"
+ICON_LIGHTBULB = "\uEA80"
+ICON_NETWORK = "\uE968"
+ICON_ACCOUNT = "\uE77B"
+ICON_PAUSE = "\uE769"
+ICON_COLOR = "\uE790"
+ICON_BRIGHTNESS = "\uE706"
+ICON_CLOSE = "\uE8BB"
+ICON_POWER = "\uE7E8"
+ICON_LOG = "\uE81C"
+ICON_BACKDROP = "\uE771"
 
 ctk.set_appearance_mode("System")  # Follows Windows Dark/Light mode
 ctk.set_default_color_theme("blue")
@@ -75,11 +77,13 @@ class DesktopLEDSyncGUI(ctk.CTk):
 
         # Windows 11 styling: pick the colors for Mica (or a solid background), then build the widgets
         self._setup_fonts()
-        self.mica = bool(settings.get("mica_background", True)) and fluent.enable_mica(self)
+        self._windows = [self]  # This window and its dialogs, which share the backdrop
+        self.mica_allowed = ctk.BooleanVar(value=bool(settings.get("mica_background", True)))
+        self._mica_reason = fluent.mica_unavailable_reason()
+        self.mica = self.mica_allowed.get() and self._mica_reason is None and fluent.enable_mica(self)
         fluent.configure(self.mica)
         fluent.apply_theme(self.font_body.cget("family"))
         self.configure(fg_color=C.window)
-        self._mica_windows = [self]
 
         # --- Header ---
         header = ctk.CTkFrame(self, fg_color="transparent")
@@ -222,6 +226,15 @@ class DesktopLEDSyncGUI(ctk.CTk):
         self.autostart_var = ctk.BooleanVar(value=self.check_if_autostart_enabled())
         self.autostart_switch = self._add_switch(card, self.autostart_var, self.on_autostart_toggle)
 
+        if fluent.mica_supported():
+            card = self._add_card(page, "Mica background", "Turn off if the window looks black", icon=ICON_BACKDROP,
+                help_text="Lets your desktop wallpaper tint the window, like Windows 11's own apps.\n\n"
+                          "The app already switches to a solid background when Windows can't draw Mica "
+                          "(transparency effects off, battery saver, Remote Desktop, high contrast). "
+                          "Turn this off if the window still looks black, which some graphics drivers "
+                          "and virtual machines cause.")
+            self.mica_switch = self._add_switch(card, self.mica_allowed, self.on_mica_toggle)
+
         ctk.CTkFrame(page, fg_color="transparent", height=8).pack()
 
         self.stop_event = None      # threading.Event for the current engine run
@@ -229,9 +242,12 @@ class DesktopLEDSyncGUI(ctk.CTk):
         self.tray_icon = None
         self._status_is_error = False
 
-        # Follow Windows switching between light and dark mode
+        # Follow Windows switching between light and dark mode, and Mica becoming (un)available
         self._on_appearance_change(ctk.get_appearance_mode())
         ctk.AppearanceModeTracker.add(self._on_appearance_change, self)
+        if self.mica_allowed.get() and self._mica_reason and fluent.mica_supported():
+            startup_messages.append((f"Using a solid background because {self._mica_reason}.", "info"))
+        self.after(MICA_CHECK_INTERVAL_MS, self._watch_mica)
 
         for message, tag in startup_messages:
             self.append_log(message, tag)
@@ -265,22 +281,61 @@ class DesktopLEDSyncGUI(ctk.CTk):
 
     def apply_backdrop(self, window):
         """Give a dialog the same backdrop as the main window."""
+        self._windows.append(window)
         if self.mica and fluent.enable_mica(window):
-            self._mica_windows.append(window)
             fluent.show_mica_in_client_area(window, ctk.get_appearance_mode() == "Dark")
         window.configure(fg_color=C.window)
 
     def _on_appearance_change(self, mode):
         """Mica only shows through the window in dark mode (see fluent.py), so switch it with the theme."""
         dark = mode == "Dark"
-        self._mica_windows = [w for w in self._mica_windows if w.winfo_exists()]
-        if self.mica:
-            for window in self._mica_windows:
-                fluent.show_mica_in_client_area(window, dark)
+        self._windows = [w for w in self._windows if w.winfo_exists()]
+        for window in self._windows:
+            fluent.show_mica_in_client_area(window, self.mica and dark)
         index = 1 if dark else 0
         self.log_box.tag_config("error", foreground=C.critical[index])
         self.log_box.tag_config("ok", foreground=C.success[index])
         self.log_box.tag_config("info", foreground=C.text_secondary[index])
+
+    def _watch_mica(self):
+        """Windows stops drawing Mica in some situations (see fluent.mica_unavailable_reason), so keep checking."""
+        try:
+            reason = fluent.mica_unavailable_reason()
+            if reason != self._mica_reason:
+                self._mica_reason = reason
+                wanted = self.mica_allowed.get() and reason is None
+                if wanted != self.mica:
+                    if self.mica_allowed.get():
+                        self.append_log(f"Using a solid background because {reason}." if reason
+                                        else "Mica background is available again.", "info")
+                    self._set_mica(wanted)
+        finally:
+            self.after(MICA_CHECK_INTERVAL_MS, self._watch_mica)
+
+    def on_mica_toggle(self):
+        self._set_mica(self.mica_allowed.get() and self._mica_reason is None)
+        self.save_settings()
+
+    def _set_mica(self, on):
+        """Switch between Mica and a solid background while the app is running."""
+        self._windows = [w for w in self._windows if w.winfo_exists()]
+        if on == self.mica or (on and not all(fluent.enable_mica(w) for w in self._windows)):
+            return
+        self.mica = on
+        dark = ctk.get_appearance_mode() == "Dark"
+        if not on:
+            for window in self._windows:
+                fluent.show_mica_in_client_area(window, False)
+        changes = fluent.configure(on)
+        fluent.apply_theme(self.font_body.cget("family"))
+        fluent.recolor(self._windows, changes)
+        if on:
+            for window in self._windows:
+                fluent.show_mica_in_client_area(window, dark)
+        # Colors that aren't stored on a widget option
+        self._on_appearance_change(ctk.get_appearance_mode())
+        self._update_idle_swatch()
+        self._show_start_button(self.is_engine_running())
 
     def _add_section_header(self, parent, text, first=False):
         ctk.CTkLabel(parent, text=text, font=self.font_strong, anchor="w").pack(
@@ -578,6 +633,7 @@ class DesktopLEDSyncGUI(ctk.CTk):
         settings["idle_behavior"] = self.idle_var.get()
         settings["match_brightness"] = self.match_brightness_var.get()
         settings["close_behavior"] = self.close_bh_var.get()
+        settings["mica_background"] = self.mica_allowed.get()
         settings["transition_seconds"] = self._transition_choices.get(self.transition_var.get(), 0)
 
         idle_color = parse_rgb(self.idle_color_entry.get())
