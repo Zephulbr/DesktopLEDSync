@@ -1,8 +1,13 @@
 import asyncio
 import colorsys
 from plugp100.common.credentials import AuthCredential
-from plugp100.new.device_factory import connect, DeviceConnectConfiguration
-from plugp100.new.components.light_component import LightComponent
+# plugp100 5.2 renamed the 'plugp100.new' package to 'plugp100.devices'
+try:
+    from plugp100.devices.device_factory import connect, DeviceConnectConfiguration
+    from plugp100.devices.components.light_component import LightComponent
+except ImportError:
+    from plugp100.new.device_factory import connect, DeviceConnectConfiguration
+    from plugp100.new.components.light_component import LightComponent
 
 from config_store import resolve_password
 from . import LightProvider
