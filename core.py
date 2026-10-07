@@ -6,7 +6,7 @@ from io import BytesIO
 
 from config_store import (
     CONFIG_PATH, DEFAULT_IDLE_COLOR, ConfigError,
-    migrate_plaintext_password, normalize_idle_behavior, parse_rgb, read_config,
+    migrate_plaintext_password, normalize_idle_behavior, parse_rgb, parse_transition_seconds, read_config,
 )
 
 # Set by gui.py so log messages reach the GUI log panel
@@ -43,6 +43,8 @@ CONNECT_TIMEOUT_SECONDS = 20
 # Windows often updates the track title before the thumbnail, so a missing or unchanged
 # thumbnail is re-checked for this many polls before we accept it
 MAX_ART_ATTEMPTS = 3
+# How often a fade sends an in-between color to lights that can't fade by themselves
+FADE_STEP_SECONDS = 0.1
 
 # --- Media Extraction Logic ---
 async def get_media_session():
@@ -161,6 +163,10 @@ class LightCommander:
         self._pending = command
         self._wakeup.set()
 
+    def has_pending(self):
+        """True when a newer command is waiting, so a long-running one should hand over."""
+        return self._pending is not None
+
     async def _run(self):
         while True:
             await self._wakeup.wait()
@@ -181,6 +187,54 @@ class LightCommander:
             await self._task
         except asyncio.CancelledError:
             pass
+
+
+class ColorFader:
+    """
+    Moves the lights to new colors with a smooth fade. Providers that can fade natively (WLED)
+    are given the duration; for the rest, in-between colors are sent every FADE_STEP_SECONDS.
+    """
+
+    def __init__(self, provider, commander):
+        self.provider = provider
+        self.commander = commander
+        self.current = None     # Color last sent to the lights, or None when off or unknown
+
+    def set_color(self, color, match_brightness, duration):
+        self.commander.submit(lambda: self._fade_to(tuple(color), match_brightness, duration))
+
+    def turn_off(self):
+        self.commander.submit(self._turn_off)
+
+    async def _turn_off(self):
+        self.current = None
+        await self.provider.turn_off()
+
+    async def _send(self, color, match_brightness, transition=0.0):
+        await self.provider.set_color(color, match_brightness, transition)
+        # (0, 0, 0) turns the lights off, so there is nothing to fade from afterwards
+        self.current = color if any(color) else None
+
+    async def _fade_to(self, target, match_brightness, duration):
+        start = self.current
+        if self.provider.supports_transitions:
+            await self._send(target, match_brightness, duration)
+            return
+        if duration <= 0 or start is None or start == target or not any(target):
+            await self._send(target, match_brightness)
+            return
+
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        while True:
+            progress = min(1.0, (loop.time() - started) / duration)
+            eased = progress * progress * (3 - 2 * progress)  # Ease in and out
+            step = tuple(round(a + (b - a) * eased) for a, b in zip(start, target))
+            if step != self.current:
+                await self._send(step, match_brightness)
+            if progress >= 1.0 or self.commander.has_pending():
+                return  # Done, or a newer color carries on from here
+            await asyncio.sleep(FADE_STEP_SECONDS)
 
 
 async def sleep_unless_stopped(seconds, is_stopped):
@@ -236,13 +290,13 @@ async def main(stop_event=None):
     commander = LightCommander()
     try:
         if not is_stopped():
-            await sync_loop(provider, commander, LiveConfig(config), is_stopped)
+            await sync_loop(ColorFader(provider, commander), LiveConfig(config), is_stopped)
     finally:
         await commander.close()
         await provider.close()
 
 
-async def sync_loop(provider, commander, live_config, is_stopped):
+async def sync_loop(fader, live_config, is_stopped):
     current_track = None        # (title, artist, album) currently shown on the lights
     art_pending = False         # True until album art has been applied for current_track
     art_attempts = 0
@@ -258,6 +312,7 @@ async def sync_loop(provider, commander, live_config, is_stopped):
         # Re-read settings each tick so GUI changes are picked up live
         settings = live_config.refresh().get("settings", {})
         match_brightness = bool(settings.get("match_brightness", False))
+        transition = parse_transition_seconds(settings.get("transition_seconds"))
         try:
             poll_interval = max(0.2, float(settings.get("poll_interval_seconds", DEFAULT_POLL_INTERVAL)))
         except (TypeError, ValueError):
@@ -296,7 +351,7 @@ async def sync_loop(provider, commander, live_config, is_stopped):
                                 last_color = color
                                 color_brightness = match_brightness
                                 log("ok", f"Color set: RGB{color}")
-                                commander.submit(lambda c=color, m=match_brightness: provider.set_color(c, m))
+                                fader.set_color(color, match_brightness, transition)
                             else:
                                 log("error", "Could not extract color from album art.")
 
@@ -304,7 +359,7 @@ async def sync_loop(provider, commander, live_config, is_stopped):
                     # 'Match Brightness' was toggled live in the GUI
                     color_brightness = match_brightness
                     log("ok", f"Color set: RGB{last_color} (Match Brightness changed)")
-                    commander.submit(lambda c=last_color, m=match_brightness: provider.set_color(c, m))
+                    fader.set_color(last_color, match_brightness, transition)
 
             elif status != PlaybackStatus.CHANGING:
                 # Paused, stopped, closed, or no media app at all
@@ -325,10 +380,10 @@ async def sync_loop(provider, commander, live_config, is_stopped):
 
                     if behavior == "Turn Off":
                         log("info", "Idle: Turning lights off.")
-                        commander.submit(provider.turn_off)
+                        fader.turn_off()
                     elif behavior == "Default Color":
                         log("info", f"Idle: Default color RGB{idle_color}")
-                        commander.submit(lambda c=idle_color, m=match_brightness: provider.set_color(c, m))
+                        fader.set_color(idle_color, match_brightness, transition)
                     else:
                         log("info", "Idle: Keeping last color.")
 

@@ -8,6 +8,7 @@ try:
 except ImportError:
     from plugp100.new.device_factory import connect, DeviceConnectConfiguration
     from plugp100.new.components.light_component import LightComponent
+from plugp100.api.requests.set_device_info.set_light_color_info_params import LightColorDeviceInfoParams
 
 from config_store import resolve_password
 from . import LightProvider
@@ -79,7 +80,7 @@ class TapoProvider(LightProvider):
             await self.connect()
             await action()
 
-    async def set_color(self, rgb_tuple, match_brightness=False):
+    async def set_color(self, rgb_tuple, match_brightness=False, transition=0.0):
         """Asynchronously send the color command."""
         r, g, b = rgb_tuple
 
@@ -99,13 +100,15 @@ class TapoProvider(LightProvider):
         else:
             brightness = 100  # Always full brightness
 
+        # One request for power, color and brightness, so fades (one call per step) stay smooth
+        params = LightColorDeviceInfoParams(
+            device_on=True, hue=hue, saturation=saturation, brightness=brightness, color_temp=0
+        )
+
         async def apply():
-            _raise_on_failure(await self.light_component.turn_on())  # Wake up if previously turned off
-            _raise_on_failure(await self.light_component.set_hue_saturation(hue, saturation))
-            _raise_on_failure(await self.light_component.set_brightness(brightness))
+            _raise_on_failure(await self.device.client.set_device_info(params))
 
         await self._run_with_reconnect(apply)
-        self._log("info", f"[Tapo] Set HSV({hue}°, {saturation}%, {brightness}%)")
 
     async def turn_off(self):
         async def apply():
