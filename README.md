@@ -42,6 +42,7 @@ Requires Windows 10 or 11.
 | When closing the window | Ask each time, minimize to the tray, or exit |
 | Color fade | How many seconds the lights take to blend into a new color (0 switches instantly) |
 | Match album art brightness | Dims the lights for darker artwork instead of always using full brightness |
+| Mica background | Windows 11 only: tints the window with your wallpaper. Turn it off if the window looks black |
 | Start with Windows | Starts with Windows, hidden in the tray, and begins syncing right away |
 
 IP address, provider and account changes take effect when you click **Save & apply**. Everything else applies instantly, even while syncing.
@@ -51,7 +52,7 @@ IP address, provider and account changes take effect when you click **Save & app
 - **"Failed to connect"**: check the IP address, and that the PC and lights are on the same network. Tapo bulbs can change IP after a router restart, so a reserved/static IP helps.
 - **Tapo login errors**: double-check the email and password of the Tapo account the bulb is registered to.
 - **Colors don't change**: make sure your player shows the track in the Windows media flyout (the volume popup). If it doesn't appear there, the app can't see it either.
-- **The window looks wrong on Windows 11**: the app uses the Mica backdrop there. To use a plain background instead, close the app, set `"mica_background": false` under `"settings"` in `config.json`, and start it again.
+- **The window looks black**: on Windows 11 the app uses the Mica backdrop. It switches to a solid background by itself when Windows can't draw Mica (transparency effects off, battery saver, Remote Desktop, high contrast). If it still looks black, which some graphics drivers and virtual machines cause, turn off **Mica background** in the app's settings.
 - **"No album art for this track"**: the player isn't sharing artwork with Windows for that track. The lights keep their current color.
 
 ## Building from Source

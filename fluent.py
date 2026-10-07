@@ -93,7 +93,11 @@ def read_windows_accent():
 
 
 def configure(mica):
-    """Build the palette, for a window that does (mica=True) or doesn't use Mica in dark mode."""
+    """
+    Build the palette, for a window that does (mica=True) or doesn't use Mica in dark mode.
+    Returns {old color: new color} for every color that changed, for recolor().
+    """
+    previous = dict(vars(C))
     colors = dict(_BASE)
     accent = read_windows_accent() or DEFAULT_ACCENT
     colors["accent"] = accent
@@ -110,6 +114,49 @@ def configure(mica):
         setattr(C, name, value)
     C.accent_solid = accent
     C.mica = mica
+    return {old: getattr(C, name) for name, old in previous.items()
+            if isinstance(old, tuple) and old != getattr(C, name)}
+
+
+# Widget options that can hold a palette color
+_COLOR_OPTIONS = (
+    "fg_color", "bg_color", "border_color", "hover_color", "text_color", "text_color_disabled",
+    "placeholder_text_color", "button_color", "button_hover_color", "progress_color", "checkmark_color",
+    "scrollbar_button_color", "scrollbar_button_hover_color",
+)
+
+
+# CTkScrollbar reads these back under different names than it sets them with
+_CGET_ALIASES = {"button_color": "scrollbar_color", "button_hover_color": "scrollbar_hover_color"}
+
+
+def recolor(windows, changes):
+    """Swap old palette colors for new ones on every widget in these windows (see configure())."""
+    pending = list(windows)
+    while pending:
+        widget = pending.pop(0)  # Parents first, so children inherit the new background
+        for option in _COLOR_OPTIONS:
+            try:
+                value = widget.cget(option)
+            except Exception:
+                try:
+                    value = widget.cget(_CGET_ALIASES[option])
+                except Exception:
+                    continue
+            if isinstance(value, list):
+                value = tuple(value)
+            if isinstance(value, tuple) and value in changes:
+                try:
+                    widget.configure(**{option: changes[value]})
+                except Exception:
+                    pass
+        if isinstance(widget, ctk.CTkScrollableFrame):
+            # Its inner frame and canvas work out their background only when fg_color is set
+            widget.configure(fg_color=widget.cget("fg_color"))
+        refresh = getattr(widget, "refresh_theme", None)
+        if callable(refresh):
+            refresh()
+        pending.extend(widget.winfo_children())
 
 
 def exact(color):
@@ -162,6 +209,51 @@ def _set_attribute(hwnd, attribute, value):
 
 def mica_supported():
     return sys.platform == "win32" and sys.getwindowsversion().build >= 22000
+
+
+class _HIGHCONTRAST(ctypes.Structure):
+    _fields_ = [("cbSize", ctypes.c_uint), ("dwFlags", ctypes.c_uint), ("lpszDefaultScheme", ctypes.c_wchar_p)]
+
+
+class _SYSTEM_POWER_STATUS(ctypes.Structure):
+    _fields_ = [("ACLineStatus", ctypes.c_ubyte), ("BatteryFlag", ctypes.c_ubyte),
+                ("BatteryLifePercent", ctypes.c_ubyte), ("SystemStatusFlag", ctypes.c_ubyte),
+                ("BatteryLifeTime", ctypes.c_ulong), ("BatteryFullLifeTime", ctypes.c_ulong)]
+
+
+def mica_unavailable_reason():
+    """
+    Why Windows won't draw Mica right now, or None if it will. Where it doesn't, the pixels Mica
+    should show through come out black, so the app has to paint a solid background instead.
+    """
+    if not mica_supported():
+        return "Mica needs Windows 11"
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as key:
+            if winreg.QueryValueEx(key, "EnableTransparency")[0] == 0:
+                return "transparency effects are off in Windows settings"
+    except OSError:
+        pass  # No value means transparency is on
+    try:
+        user32 = ctypes.windll.user32
+        SM_REMOTESESSION = 0x1000
+        if user32.GetSystemMetrics(SM_REMOTESESSION):
+            return "this is a Remote Desktop session"
+
+        SPI_GETHIGHCONTRAST, HCF_HIGHCONTRASTON = 0x42, 0x1
+        contrast = _HIGHCONTRAST(cbSize=ctypes.sizeof(_HIGHCONTRAST))
+        if user32.SystemParametersInfoW(SPI_GETHIGHCONTRAST, contrast.cbSize, ctypes.byref(contrast), 0) \
+                and contrast.dwFlags & HCF_HIGHCONTRASTON:
+            return "a high contrast theme is on"
+
+        power = _SYSTEM_POWER_STATUS()
+        if ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(power)) and power.SystemStatusFlag == 1:
+            return "battery saver is on"
+    except Exception:
+        pass
+    return None
 
 
 def enable_mica(window):
@@ -238,6 +330,7 @@ class ComboBox(ctk.CTkFrame):
 
     def __init__(self, master, values, variable, command=None, width=200, font=None, icon_font=None,
                  on_window=False):
+        self._on_window = on_window
         self._fill = C.window_control if on_window else C.control
         self._fill_hover = C.window_control_hover if on_window else C.control_hover
         super().__init__(master, width=width, height=32, corner_radius=4, border_width=1, fg_color=self._fill,
@@ -262,6 +355,10 @@ class ComboBox(ctk.CTkFrame):
             fg_color=self._fill_hover if hovering or self._flyout else self._fill))
         for widget in widgets:
             widget.bind("<Button-1>", self._open, add="+")
+
+    def refresh_theme(self):
+        self._fill = C.window_control if self._on_window else C.control
+        self._fill_hover = C.window_control_hover if self._on_window else C.control_hover
 
     def _open(self, _event=None):
         if self._flyout is not None:
@@ -367,10 +464,6 @@ class Toggle(ctk.CTkFrame):
         super().__init__(master, fg_color="transparent", corner_radius=0)
         self.variable = variable
         self.command = command
-        self._images = {
-            (on, hover): ctk.CTkImage(_toggle_image(on, hover, 0), _toggle_image(on, hover, 1), size=(40, 20))
-            for on in (False, True) for hover in (False, True)
-        }
         self._label = ctk.CTkLabel(self, font=font, width=28, anchor="e")
         self._label.pack(side="left", padx=(0, 12))
         self._switch = ctk.CTkLabel(self, text="", width=40, height=20)
@@ -380,6 +473,13 @@ class Toggle(ctk.CTkFrame):
         for widget in (self._label, self._switch):
             widget.bind("<Button-1>", self._toggle, add="+")
         variable.trace_add("write", lambda *_: self._refresh())
+        self.refresh_theme()
+
+    def refresh_theme(self):
+        self._images = {
+            (on, hover): ctk.CTkImage(_toggle_image(on, hover, 0), _toggle_image(on, hover, 1), size=(40, 20))
+            for on in (False, True) for hover in (False, True)
+        }
         self._refresh()
 
     def _toggle(self, _event=None):
