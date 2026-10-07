@@ -61,7 +61,7 @@ python gui.py        # run directly
 python build.py      # or build dist/DesktopLEDSync.exe
 ```
 
-Releases are built automatically by GitHub Actions: pushing a tag like `v1.0.1` builds the `.exe` and attaches it to a new release.
+Releases are built by GitHub Actions on a Windows runner. To publish one, push a tag like `v1.1.1`, or run **Build and Release** from the Actions tab and enter the version.
 
 ## How It Works
 
