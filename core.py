@@ -5,8 +5,8 @@ import sys
 from io import BytesIO
 
 from config_store import (
-    CONFIG_PATH, DEFAULT_IDLE_COLOR, ConfigError,
-    migrate_plaintext_password, normalize_idle_behavior, parse_rgb, parse_transition_seconds, read_config,
+    CONFIG_PATH, DEFAULT_IDLE_COLOR, ConfigError, migrate_legacy_config, migrate_plaintext_password,
+    normalize_idle_behavior, parse_rgb, parse_transition_seconds, read_config,
 )
 
 # Set by gui.py so log messages reach the GUI log panel
@@ -266,6 +266,10 @@ async def main(stop_event=None):
         return stop_event is not None and stop_event.is_set()
 
     log("info", f"Desktop LED Sync {__version__} - Initializing...")
+    try:
+        migrate_legacy_config()  # Normally done by the GUI already
+    except Exception as e:
+        log("error", f"Could not copy settings from the app's folder: {e}")
     try:
         config = read_config()
     except ConfigError as e:

@@ -1,7 +1,7 @@
 """Shared config.json handling used by both the GUI and the core engine."""
 import json
 import os
-import stat
+import shutil
 import sys
 import tempfile
 import time
@@ -16,13 +16,29 @@ MAX_TRANSITION_SECONDS = 5.0
 # Older configs stored idle behavior in snake_case
 _IDLE_BEHAVIOR_ALIASES = {"default_color": "Default Color", "turn_off": "Turn Off", "do_nothing": "Do Nothing"}
 
-# Safely determine the config path whether running from terminal or PyInstaller .exe
+# Older versions kept config.json next to the .exe (or gui.py), which breaks in folders such as
+# Downloads where antivirus can lock the file. Settings now live in %APPDATA%\DesktopLEDSync.
 if getattr(sys, 'frozen', False):
-    application_path = os.path.dirname(sys.executable)
+    _legacy_dir = os.path.dirname(sys.executable)
 else:
-    application_path = os.path.dirname(os.path.abspath(__file__))
+    _legacy_dir = os.path.dirname(os.path.abspath(__file__))
+LEGACY_CONFIG_PATH = os.path.join(_legacy_dir, "config.json")
 
-CONFIG_PATH = os.path.join(application_path, "config.json")
+CONFIG_DIR = os.path.join(os.environ["APPDATA"], "DesktopLEDSync") if os.environ.get("APPDATA") else _legacy_dir
+CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
+
+
+def migrate_legacy_config():
+    """
+    Copy config.json from next to the .exe into CONFIG_DIR the first time this version runs.
+    Returns the path it was copied from, or None. The old file is left where it was.
+    """
+    if os.path.exists(CONFIG_PATH) or not os.path.exists(LEGACY_CONFIG_PATH) \
+            or os.path.normcase(os.path.abspath(LEGACY_CONFIG_PATH)) == os.path.normcase(os.path.abspath(CONFIG_PATH)):
+        return None
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    shutil.copy2(LEGACY_CONFIG_PATH, CONFIG_PATH)
+    return LEGACY_CONFIG_PATH
 
 
 class ConfigError(Exception):
@@ -41,42 +57,27 @@ def read_config():
 
 
 def write_config(config):
-    """
-    Write config.json atomically so the engine never reads a half-written file. If Windows won't let
-    the new file replace the old one (antivirus or a sync tool holding it open, a read-only file),
-    overwrite it in place instead.
-    """
-    text = json.dumps(config, indent=2)
-    fd, tmp_path = tempfile.mkstemp(dir=application_path, prefix=".config-", suffix=".tmp")
+    """Write config.json atomically so the engine never reads a half-written file."""
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=CONFIG_DIR, prefix=".config-", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(text)
-        # The replace fails while anything else has the file open, so retry for about a second
+            json.dump(config, f, indent=2)
+        # On Windows the replace fails while anything else has the file open (such as the engine
+        # reading it), so retry for about a second
         delay = 0.02
-        for _ in range(8):
+        for attempt in range(8):
             try:
                 os.replace(tmp_path, CONFIG_PATH)
                 return
             except PermissionError:
+                if attempt == 7:
+                    raise
                 time.sleep(delay)
                 delay *= 2
     finally:
         if os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
-
-    try:
-        if os.path.exists(CONFIG_PATH):
-            os.chmod(CONFIG_PATH, stat.S_IREAD | stat.S_IWRITE)  # Clear the read-only attribute
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            f.write(text)
-    except PermissionError as e:
-        raise PermissionError(
-            f"Windows denied access to {CONFIG_PATH}. Another program (often antivirus or a cloud sync "
-            "folder) may be blocking it. Moving the app into a folder of its own, outside Downloads, "
-            "usually helps.") from e
+            os.remove(tmp_path)
 
 
 def parse_rgb(value):
