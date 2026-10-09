@@ -24,6 +24,11 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64compatible
+VersionInfoVersion={#AppVersion}.0
+VersionInfoCompany={#AppPublisher}
+VersionInfoDescription={#AppName} Setup
+VersionInfoProductName={#AppName}
+VersionInfoProductVersion={#AppVersion}
 
 ; Allow installation without administrator privileges (installs to %LocalAppData%\Programs)
 ; or allow user to elevate and install for all users (Program Files)
