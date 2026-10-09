@@ -88,4 +88,4 @@ To add another brand (Hue, Govee, Nanoleaf...), add a `LightProvider` subclass i
 
 ## License
 
-Desktop LED Sync is free software, released under the [GNU General Public License v3.0](LICENSE) (or, at your option, any later version).
+Desktop LED Sync is free software, released under the [GNU General Public License v3.0](LICENSE)
