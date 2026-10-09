@@ -19,9 +19,9 @@ Desktop LED Sync picks the dominant color from the current track's album art and
 
 ## Download
 
-1. Grab `DesktopLEDSync.exe` from the [latest release](https://github.com/Zephulbr/DesktopLEDSync/releases/latest).
-2. Put it anywhere you like. It saves its settings to `%APPDATA%\DesktopLEDSync\config.json` (versions before 1.4.1 kept them next to the `.exe`; they're copied over automatically).
-3. Run it. Windows SmartScreen may warn about an unrecognized app because the `.exe` isn't code-signed; choose **More info → Run anyway**.
+1. Grab `DesktopLEDSync-Setup.exe` (installer) or `DesktopLEDSync.exe` (portable) from the [latest release](https://github.com/akritsimallis/DesktopLEDSync/releases/latest).
+2. Run the setup installer or put the portable `.exe` anywhere you like. Settings are saved to `%APPDATA%\DesktopLEDSync\config.json` (versions before 1.4.1 kept them next to the `.exe`; they're copied over automatically).
+3. Run it. Windows SmartScreen may warn about an unrecognized app because the file isn't code-signed; choose **More info → Run anyway**.
 
 Requires Windows 10 or 11.
 
@@ -67,10 +67,12 @@ You need Windows and Python 3.10 or newer.
 ```bash
 pip install -r requirements.txt
 python gui.py        # run directly
-python build.py      # or build dist/DesktopLEDSync.exe
+python build.py      # builds dist/DesktopLEDSync.exe and dist/DesktopLEDSync-Setup.exe
 ```
 
 The app version is set in `version.py`, and shown in the window header and in the .exe's **Properties → Details**. Bump it with every change.
+
+If [Inno Setup 6](https://jrsoftware.org/isdl.php) is installed (`winget install JRSoftware.InnoSetup`), `build.py` automatically packages `dist/DesktopLEDSync-Setup.exe` after building the executable. You can also pass `--only-installer` to rebuild just the installer, or `--no-installer` to skip it.
 
 Releases are built by GitHub Actions on a Windows runner. Merging a change that bumps `version.py` into `main` publishes a release for that version automatically (tagged e.g. `v1.2.0`); pushes that keep the same version don't build anything. To build an .exe without releasing it, run **Build and Release** from the Actions tab with the version left blank.
 
@@ -88,4 +90,4 @@ To add another brand (Hue, Govee, Nanoleaf...), add a `LightProvider` subclass i
 
 ## License
 
-Desktop LED Sync is free software, released under the [GNU General Public License v3.0](LICENSE)
+Desktop LED Sync is free software, released under the [GNU General Public License v3.0](LICENSE) (or, at your option, any later version).

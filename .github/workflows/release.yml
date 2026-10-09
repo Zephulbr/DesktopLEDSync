@@ -82,14 +82,19 @@ jobs:
       - name: Check the app imports cleanly
         run: python -c "import core, gui"
 
-      - name: Build executable
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress
+
+      - name: Build executable and installer
         run: python build.py
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: DesktopLEDSync
-          path: dist/DesktopLEDSync.exe
+          path: |
+            dist/DesktopLEDSync.exe
+            dist/DesktopLEDSync-Setup.exe
 
       - name: Publish release
         if: needs.version.outputs.publish == 'true'
@@ -97,5 +102,7 @@ jobs:
         with:
           tag_name: ${{ needs.version.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          files: dist/DesktopLEDSync.exe
+          files: |
+            dist/DesktopLEDSync.exe
+            dist/DesktopLEDSync-Setup.exe
           generate_release_notes: true
