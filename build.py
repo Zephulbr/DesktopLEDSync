@@ -44,12 +44,14 @@ cmd = [
     "--onefile",
     "--noconsole", # Don't show the black DOS command prompt window anymore
     "--version-file", version_file,
+    "--icon", os.path.join("assets", "app_icon.ico"),
 
     # config.json is deliberately NOT bundled: it holds your account details, and the app
     # reads/creates it in %APPDATA%\DesktopLEDSync on first run anyway.
 
     # CustomTkinter needs its theme files explicitly bundled in Windows
     "--add-data", f"{os.path.dirname(ctk.__file__)};customtkinter",
+    "--add-data", "assets;assets",
 ]
 
 # The Windows Runtime projections are namespace packages that PyInstaller can't fully trace

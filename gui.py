@@ -50,6 +50,15 @@ ctk.set_appearance_mode("System")  # Follows Windows Dark/Light mode
 ctk.set_default_color_theme("blue")
 
 
+def resource_path(relative_path):
+    """Get absolute path to resource, works for dev and for PyInstaller bundle."""
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(os.path.dirname(__file__))
+    return os.path.join(base_path, relative_path)
+
+
 def format_transition(seconds):
     return f"{seconds:g} s" if seconds > 0 else "Off"
 
@@ -61,6 +70,14 @@ class DesktopLEDSyncGUI(ctk.CTk):
         self.title(f"Desktop LED Sync {__version__}")
         self.geometry("520x760")
         self.resizable(False, False)
+
+        icon_ico = resource_path(os.path.join("assets", "app_icon.ico"))
+        if os.path.exists(icon_ico):
+            try:
+                self.iconbitmap(icon_ico)
+            except Exception:
+                pass
+
         if start_in_background:
             self.withdraw()
 
@@ -312,6 +329,13 @@ class DesktopLEDSyncGUI(ctk.CTk):
         if self.mica and fluent.enable_mica(window):
             fluent.show_mica_in_client_area(window, ctk.get_appearance_mode() == "Dark")
         window.configure(fg_color=C.window)
+        icon_ico = resource_path(os.path.join("assets", "app_icon.ico"))
+        if os.path.exists(icon_ico):
+            try:
+                window.iconbitmap(icon_ico)
+                window.after(200, lambda: window.iconbitmap(icon_ico))
+            except Exception:
+                pass
 
     def _on_appearance_change(self, mode):
         """Mica only shows through the window in dark mode (see fluent.py), so switch it with the theme."""
@@ -530,6 +554,9 @@ class DesktopLEDSyncGUI(ctk.CTk):
                 shortcut.Targetpath = pythonw if os.path.exists(pythonw) else sys.executable
                 shortcut.Arguments = f'"{script}" {BACKGROUND_FLAG}'
                 shortcut.WorkingDirectory = os.path.dirname(script)
+                icon_ico = resource_path(os.path.join("assets", "app_icon.ico"))
+                if os.path.exists(icon_ico):
+                    shortcut.IconLocation = f"{icon_ico},0"
             shortcut.save()
             self.append_log("Added Windows startup shortcut.", "info")
         else:
@@ -817,7 +844,13 @@ class DesktopLEDSyncGUI(ctk.CTk):
 
     # --- System Tray Logic ---
     def create_image(self):
-        # Generate a simple 64x64 colored square icon dynamically for the tray
+        icon_png = resource_path(os.path.join("assets", "app_icon.png"))
+        if os.path.exists(icon_png):
+            try:
+                return Image.open(icon_png)
+            except Exception:
+                pass
+        # Fallback: simple 64x64 colored square icon dynamically for the tray
         image = Image.new('RGB', (64, 64), color=(50, 150, 255))
         dc = ImageDraw.Draw(image)
         dc.rectangle((16, 16, 48, 48), fill=(255, 255, 255))
