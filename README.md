@@ -85,3 +85,7 @@ Releases are built by GitHub Actions on a Windows runner. Merging a change that 
 | `config_store.py` | Reads and writes `config.json` in `%APPDATA%\DesktopLEDSync`, and keeps the Tapo password in Windows Credential Manager. |
 
 To add another brand (Hue, Govee, Nanoleaf...), add a `LightProvider` subclass in `providers/` implementing `connect`, `set_color` and `turn_off`, then register it in `initialize_provider` in `core.py` and in the provider dropdown in `gui.py`.
+
+## License
+
+Desktop LED Sync is free software, released under the [GNU General Public License v3.0](LICENSE) (or, at your option, any later version).
